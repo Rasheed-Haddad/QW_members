@@ -1,0 +1,86 @@
+{
+  "name": "qaddha-wqdood-employers",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "dev": "npx vite",
+    "build": "npx vite build",
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5174 && electron .\"",
+    "electron:build": "npm run build && electron .",
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
+    "preview": "npx vite preview",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "pack": "npm run build && electron-builder --dir"
+  },
+  "dependencies": {
+    "@reduxjs/toolkit": "^2.5.1",
+    "axios": "^1.10.0",
+    "lucide-react": "^0.441.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-redux": "latest",
+    "react-router-dom": "^6.26.2"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "electron": "^38.1.0",
+    "electron-builder": "^26.0.12",
+    "@types/node": "^20.11.18",
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1",
+    "@typescript-eslint/eslint-plugin": "^5.54.0",
+    "@typescript-eslint/parser": "^5.54.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^8.50.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.1",
+    "postcss": "latest",
+    "tailwindcss": "3.4.17",
+    "typescript": "^5.5.4",
+    "vite": "^5.2.0"
+  },
+  "build": {
+    "appId": "com.qaddhawqdood.employers",
+    "productName": "Qaddha Wqdood Employers",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "node_modules/**/*",
+      "assets/QW_ICON.jpg"
+    ],
+    "win": {
+      "icon": "assets/QW_ICON.jpg",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Qaddha-Wqdood-Employers-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Qaddha Wqdood Employers"
+    },
+    "portable": {
+      "artifactName": "Qaddha-Wqdood-Employers-${version}-Portable.exe"
+    }
+  }
+}
