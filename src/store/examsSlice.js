@@ -28,13 +28,14 @@ export const fetch_exams = createAsyncThunk(
 export const update_exam = createAsyncThunk(
   "exams/updateExam",
   async (
-    { _id, new_questions, employer_id, elapsed_seconds },
+    { _id, new_questions, new_classifications, employer_id, elapsed_seconds },
     { rejectWithValue },
   ) => {
     try {
       const response = await axios.put(`${API_BASE_URL}/updateexam`, {
         _id,
         new_questions,
+        new_classifications,
         employee: true,
         employer_id,
         elapsed_seconds,

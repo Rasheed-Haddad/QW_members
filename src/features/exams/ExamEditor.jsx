@@ -17,6 +17,61 @@ import {
 // مدّة تبدّل الحالة من "غير محفوظ" إلى "محفوظ" (مسودة)
 const AUTOSAVE_DELAY_MS = 4000;
 
+// ─── helpers: تسجيل قرارات جلسة التعديل كتصنيفات للمصنّف ─────────────────────
+// (تعمل دائماً عند الحفظ — التصنيفات تُخزَّن في كولكشن مستقل عن المواد)
+
+// بصمة مقارنة: نص السؤال + الخيارات + الجواب فقط.
+// تغيير المحاضرة وحدها أو نوع الجواب ("2" مقابل 2) لا يُعتبر تعديلاً.
+const questionFingerprint = (q) =>
+  JSON.stringify([
+    (q.question || "").trim(),
+    (q.options || []).map((o) => (o || "").trim()),
+    String(q.answer ?? "").trim(),
+  ]);
+
+// عنصر تصنيف بنفس صيغة استيراد JSON في واجهة MCQ Classifier
+// classification_confidence = 1 لأنه قرار بشري من المحرر
+const toClassificationEntry = (q, classification) => ({
+  question: q.question,
+  options: [...(q.options || [])],
+  answer: String(q.answer ?? ""),
+  lecture: q.lecture || "",
+  classification,
+  classification_confidence: 1,
+});
+
+/**
+ * يقارن أسئلة الجلسة بنسخة القاعدة (مطابقة بـ _id تبع المونغو) ويبني
+ * مصفوفة تصنيفات تُخزَّن في كولكشن QuestionClassifications المستقل —
+ * مستند المادة نفسه يبقى نظيفاً بلا أي حقول تصنيف:
+ * - لم يُلمس / عُدّل / أُضيف ← السؤال الحي "accepted"
+ * - عُدّل ← النسخة الأصلية "needs_edit"
+ * - حُذف ← "rejected"
+ */
+const buildClassificationSnapshot = (baselineQuestions, currentQuestions) => {
+  const currentIds = new Set(
+    currentQuestions.filter((q) => q._id).map((q) => String(q._id)),
+  );
+  const baseline = new Map(
+    baselineQuestions.filter((q) => q._id).map((q) => [String(q._id), q]),
+  );
+
+  const entries = [];
+  for (const q of currentQuestions) {
+    const original = q._id ? baseline.get(String(q._id)) : null;
+    if (original && questionFingerprint(original) !== questionFingerprint(q)) {
+      entries.push(toClassificationEntry(original, "needs_edit"));
+    }
+    entries.push(toClassificationEntry(q, "accepted"));
+  }
+  for (const q of baselineQuestions) {
+    if (q._id && !currentIds.has(String(q._id))) {
+      entries.push(toClassificationEntry(q, "rejected"));
+    }
+  }
+  return entries;
+};
+
 const formatElapsed = (totalSeconds) => {
   const m = Math.floor(totalSeconds / 60);
   const s = totalSeconds % 60;
@@ -333,10 +388,15 @@ const ExamEditor = () => {
     const finalElapsed = elapsedSeconds;
 
     try {
+      // تصنيفات جلسة التعديل — تُخزَّن في كولكشن مستقل، والأسئلة تُرسل نظيفة
+      const new_classifications = Array.isArray(examToEdit.questions)
+        ? buildClassificationSnapshot(examToEdit.questions, questions)
+        : [];
       await dispatch(
         update_exam({
           _id: examToEdit._id,
           new_questions: questions,
+          new_classifications,
           employer_id: employer?._id,
           elapsed_seconds: finalElapsed,
         }),
