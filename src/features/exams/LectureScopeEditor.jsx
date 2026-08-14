@@ -937,6 +937,7 @@ const LectureScopeEditor = ({
             // SummaryEditor يعمل على مصفوفة ملخصات المادة؛ نمرّر ملخص هذه
             // المحاضرة وحده ونعيد الأول — فلا يرى محاضرةً غيرها ولا يحرّكها.
             <SummaryEditor
+              singleLecture
               formData={{ summary: [draft.summary] }}
               handleChange={(name, val) => {
                 if (name !== "summary") return;

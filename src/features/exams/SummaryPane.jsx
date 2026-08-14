@@ -22,7 +22,7 @@ const MODES = [
   ["edit", "تحرير", Code2],
 ];
 
-export default function SummaryPane({ sections, onChange }) {
+export default function SummaryPane({ sections, onChange, title }) {
   const [mode, setMode] = useState("split");
   const list = Array.isArray(sections) ? sections : [];
 
@@ -59,10 +59,15 @@ export default function SummaryPane({ sections, onChange }) {
           <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
             <SummaryEditor
               // اللفّ والفكّ: المحرّر يتوقّع مصفوفة محاضرات
-              formData={{ summary: [{ sections: list }] }}
+              // `singleLecture` يجعل اللصق يستبدل هذه المحاضرة بدل أن يُلحق
+              // ثانيةً — والفكّ يقرأ الأولى وحدها فكانت الثانية تسقط صامتة.
+              singleLecture
+              formData={{ summary: [{ meta: { lecture_title: title || "" }, sections: list }] }}
               handleChange={(name, val) => {
                 if (name !== "summary") return;
-                onChange(val?.[0]?.sections || []);
+                onChange(
+                  Array.isArray(val?.[0]?.sections) ? val[0].sections : [],
+                );
               }}
             />
           </div>

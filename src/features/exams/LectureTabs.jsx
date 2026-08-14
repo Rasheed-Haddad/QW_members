@@ -398,6 +398,7 @@ export default function LectureTabs({
         {tab === "summary" && (
           <SummaryPane
             sections={draft.summary}
+            title={lecture?.name}
             onChange={(sections) => {
               setDraft((d) => ({ ...d, summary: sections }));
               markDirty("summary");

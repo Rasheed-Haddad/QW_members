@@ -35,7 +35,7 @@ const Pill = ({ color = "gray", children }) => {
 };
 
 // ─── JSON Paste Modal ─────────────────────────────────────────────────────────
-const JsonPasteModal = memo(({ onClose, onApply }) => {
+const JsonPasteModal = memo(({ onClose, onApply, replaces = false }) => {
   const [text, setText] = useState("");
   const [error, setError] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -78,7 +78,9 @@ const JsonPasteModal = memo(({ onClose, onApply }) => {
               لصق JSON محاضرة
             </h3>
             <p className="text-sm text-gray-400 mt-0.5">
-              الصق JSON كما هو — سيتم حفظه بدون تعديل
+              {replaces
+                ? "الصق JSON كما هو — سيحلّ محلّ ملخّص هذه المحاضرة"
+                : "الصق JSON كما هو — سيتم حفظه بدون تعديل"}
             </p>
           </div>
           <button
@@ -162,7 +164,7 @@ const JsonPasteModal = memo(({ onClose, onApply }) => {
             className="flex-1 text-white font-bold py-3 rounded-xl transition-all text-sm disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ background: V }}
           >
-            إضافة المحاضرة
+            {replaces ? "استبدال الملخّص" : "إضافة المحاضرة"}
           </button>
         </div>
       </div>
@@ -481,7 +483,11 @@ const LectureCard = memo(({ lecture, index, onChange, onDelete }) => {
 });
 
 // ─── SummaryEditor (Main Export) ──────────────────────────────────────────────
-const SummaryEditor = memo(({ formData, handleChange }) => {
+// `singleLecture`: المحرّر مفتوحٌ على نطاق محاضرةٍ واحدة (تبويب الملخّص في
+// تعديل المادة، وورشة المحاضرة). المستدعي هناك يقرأ العنصر الأول وحده، فلو
+// أضفنا محاضرةً ثانيةً لسقطت صامتةً ولبدا الزرّ معطَّلاً. في هذا النطاق يحلّ
+// الملصوق محلّ المحاضرة بدل أن يُلحَق بها.
+const SummaryEditor = memo(({ formData, handleChange, singleLecture = false }) => {
   const summary = Array.isArray(formData.summary) ? formData.summary : [];
   const [showJsonModal, setShowJsonModal] = useState(false);
 
@@ -503,7 +509,16 @@ const SummaryEditor = memo(({ formData, handleChange }) => {
   };
 
   const handleJsonApply = (lecture) => {
-    updateSummary([...summary, lecture]);
+    if (singleLecture) {
+      // نحفظ ربط المحاضرة (lecture_id وغيره) إن لم يذكره الملصوق، فالنطاق
+      // محاضرةٌ بعينها ولا يصحّ أن يفقد هويّتها بلصق ملخّصها.
+      const prevMeta = summary[0]?.meta;
+      updateSummary([
+        prevMeta ? { ...lecture, meta: { ...prevMeta, ...lecture.meta } } : lecture,
+      ]);
+    } else {
+      updateSummary([...summary, lecture]);
+    }
     setShowJsonModal(false);
   };
 
@@ -584,7 +599,7 @@ const SummaryEditor = memo(({ formData, handleChange }) => {
           onMouseLeave={(e) => (e.currentTarget.style.background = V + "08")}
         >
           <ClipboardPaste size={18} />
-          لصق JSON محاضرة جديدة
+          {singleLecture ? "لصق JSON لهذا الملخّص" : "لصق JSON محاضرة جديدة"}
         </button>
       </div>
 
@@ -593,6 +608,7 @@ const SummaryEditor = memo(({ formData, handleChange }) => {
         <JsonPasteModal
           onClose={() => setShowJsonModal(false)}
           onApply={handleJsonApply}
+          replaces={singleLecture}
         />
       )}
     </div>
