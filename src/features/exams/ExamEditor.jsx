@@ -1,82 +1,96 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo, memo } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { update_exam } from "../../store/examsSlice";
+import {
+  update_exam,
+  add_exam,
+  fetch_one_subject,
+} from "../../store/examsSlice";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   ArrowRight,
   Plus,
-  Save,
+  ArrowUp,
+  ArrowDown,
+  Move,
+  Download,
   Cloud,
   CloudOff,
   X,
-  Timer,
-  Filter,
-  ClipboardPaste,
+  Layers,
 } from "lucide-react";
+import LectureLinkPanel from "./LectureLinkPanel"; // ← جديد
 
-// مدّة تبدّل الحالة من "غير محفوظ" إلى "محفوظ" (مسودة)
-const AUTOSAVE_DELAY_MS = 4000;
+// ─── تطبيع عربي للبحث ────────────────────────────────────────────────────────
+// من يكتب «الاسنان» يقصد «الأسنان»، ومن يكتب «مسؤول» يقصد «مسئول».
+// بحثٌ حرفيّ يفشل في كليهما، فنُسقط التشكيل ونوحّد الهمزات والتاء المربوطة.
+const normAr = (s) =>
+  String(s == null ? "" : s)
+    .replace(/[\u064B-\u0652\u0670\u0640]/g, "") // تشكيل وتطويل
+    .replace(/[\u0623\u0625\u0622\u0671]/g, "\u0627") // أ إ آ ٱ ← ا
+    .replace(/\u0649/g, "\u064A") // ى ← ي
+    .replace(/\u0629/g, "\u0647") // ة ← ه
+    .replace(/[\u0624\u0626]/g, "\u0621") // ؤ ئ ← ء
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 
-// ─── helpers: تسجيل قرارات جلسة التعديل كتصنيفات للمصنّف ─────────────────────
-// (تعمل دائماً عند الحفظ — التصنيفات تُخزَّن في كولكشن مستقل عن المواد)
+// ─── helper: extract lecture title from a summary JSON object ────────────────
+const getSummaryTitle = (obj) =>
+  obj?.meta?.lecture_title || obj?.lecture_title || obj?.title || null;
 
-// بصمة مقارنة: نص السؤال + الخيارات + الجواب فقط.
-// تغيير المحاضرة وحدها أو نوع الجواب ("2" مقابل 2) لا يُعتبر تعديلاً.
-const questionFingerprint = (q) =>
-  JSON.stringify([
-    (q.question || "").trim(),
-    (q.options || []).map((o) => (o || "").trim()),
-    String(q.answer ?? "").trim(),
-  ]);
+// ─── ModeSwitch ────────────────────────────────────────────────────────────────
 
-// عنصر تصنيف بنفس صيغة استيراد JSON في واجهة MCQ Classifier
-// classification_confidence = 1 لأنه قرار بشري من المحرر
-const toClassificationEntry = (q, classification) => ({
-  question: q.question,
-  options: [...(q.options || [])],
-  answer: String(q.answer ?? ""),
-  lecture: q.lecture || "",
-  classification,
-  classification_confidence: 1,
+
+// ─── BasicFieldsSection ────────────────────────────────────────────────────────
+
+const BasicFieldsSection = memo(({ formData, handleChange, isEditing }) => {
+  return (
+    <div className="gap-3 bg-white p-4 rounded-lg border border-gray-200">
+      {[
+        { label: "اسم المادة", name: "name" },
+        { label: "رمز الكلية", name: "college_id" },
+        { label: "سعر خطة ترفيع", name: "price" },
+        { label: "سعر خطة معدل", name: "price_moadal" },
+      ].map((field) => (
+        <div key={field.name}>
+          <span className="text-xs mb-1 text-gray-600">{field.label}</span>
+          <input
+            value={formData[field.name]?.toString() || ""}
+            onChange={(e) => handleChange(field.name, e.target.value)}
+            className="w-full border border-gray-300 p-3 rounded-lg text-sm bg-white"
+          />
+        </div>
+      ))}
+
+      {isEditing && (
+        <div>
+          <span className="text-xs mb-1 text-gray-600">
+            الطلاب المسجلين على المادة
+          </span>
+          <textarea
+            style={{ direction: "ltr" }}
+            value={formData.available_to.toString()}
+            onChange={(e) => handleChange("available_to", e.target.value)}
+            className="w-full border border-gray-300 p-3 rounded-lg text-sm bg-white"
+            rows={3}
+          />
+        </div>
+      )}
+
+      <div>
+        <span className="text-xs mb-1 text-gray-600">وصف المادة</span>
+        <textarea
+          value={formData.info}
+          onChange={(e) => handleChange("info", e.target.value)}
+          className="w-full border border-gray-300 p-3 rounded-lg text-sm bg-white"
+          rows={3}
+        />
+      </div>
+    </div>
+  );
 });
 
-/**
- * يقارن أسئلة الجلسة بنسخة القاعدة (مطابقة بـ _id تبع المونغو) ويبني
- * مصفوفة تصنيفات تُخزَّن في كولكشن QuestionClassifications المستقل —
- * مستند المادة نفسه يبقى نظيفاً بلا أي حقول تصنيف:
- * - لم يُلمس / عُدّل / أُضيف ← السؤال الحي "accepted"
- * - عُدّل ← النسخة الأصلية "needs_edit"
- * - حُذف ← "rejected"
- */
-const buildClassificationSnapshot = (baselineQuestions, currentQuestions) => {
-  const currentIds = new Set(
-    currentQuestions.filter((q) => q._id).map((q) => String(q._id)),
-  );
-  const baseline = new Map(
-    baselineQuestions.filter((q) => q._id).map((q) => [String(q._id), q]),
-  );
-
-  const entries = [];
-  for (const q of currentQuestions) {
-    const original = q._id ? baseline.get(String(q._id)) : null;
-    if (original && questionFingerprint(original) !== questionFingerprint(q)) {
-      entries.push(toClassificationEntry(original, "needs_edit"));
-    }
-    entries.push(toClassificationEntry(q, "accepted"));
-  }
-  for (const q of baselineQuestions) {
-    if (q._id && !currentIds.has(String(q._id))) {
-      entries.push(toClassificationEntry(q, "rejected"));
-    }
-  }
-  return entries;
-};
-
-const formatElapsed = (totalSeconds) => {
-  const m = Math.floor(totalSeconds / 60);
-  const s = totalSeconds % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-};
+// ─── ExamEditor ────────────────────────────────────────────────────────────────
 
 const ExamEditor = () => {
   const navigate = useNavigate();
@@ -84,40 +98,68 @@ const ExamEditor = () => {
   const examId = params.id || params.examId || null;
 
   const dispatch = useDispatch();
-  const { exams, loading } = useSelector((state) => state.exams);
-  const employer = useSelector((state) => state.auth.employer);
+  const { exams, loading, full_loaded } = useSelector(
+    (state) => state.exams,
+  );
 
   const [isSaved, setIsSaved] = useState(true);
   const autoSaveTimeoutRef = useRef(null);
+  const [showSortModal, setShowSortModal] = useState(false);
 
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [pastedText, setPastedText] = useState("");
 
-  // ─── التصفية حسب المحاضرة (مثل QWCP) ─────────────────────────────────────────
-  const [selectedLecture, setSelectedLecture] = useState("الكل");
-  const [showLectureFilter, setShowLectureFilter] = useState(false);
-
-  // ─── عداد الوقت المنقضي ──────────────────────────────────────────────────────
-  // يعدّ فقط عندما تكون الحالة "غير محفوظ"، ويتراكم حتى الضغط على حفظ.
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const elapsedIntervalRef = useRef(null);
-
   const examToEdit = useMemo(() => {
     if (!examId || !exams) return null;
-    if (Array.isArray(exams)) return exams.find((e) => e._id === examId) || null;
+    if (Array.isArray(exams))
+      return exams.find((e) => e._id === examId) || null;
     return exams[examId] || null;
   }, [exams, examId]);
+
+  // النية تُشتق من المسار لا من وجود الكائن في الذاكرة.
+  // `Boolean(examToEdit)` كان يعني: مادة لم تُجلب بعد ⇒ المحرّر يظنّ نفسه
+  // في وضع «إنشاء» صامتاً، فيُنشئ مادة مكرّرة بدل تعديل القائمة.
+  // هذا الفرق حاسم قبل تحويل الجلب إلى تدريجي (حيث الغياب هو الأصل).
+  const isEditing = Boolean(examId);
+  // المادة مطلوبة للتعديل ولم تصل بعد ⇒ لا نعرض نموذجاً ولا نسمح بحفظ
+  const isLoadingSubject = isEditing && !examToEdit;
+
+  // المحرّر يجلب مادته بنفسه.
+  // سابقاً كان يعتمد كلياً على وجودها في الحالة من جلبٍ شامل سابق —
+  // وهو ما يسقط مع الجلب التدريجي (وعند تحديث الصفحة بـF5 أصلاً).
+  const isFullyLoaded = Boolean(examId && full_loaded?.[String(examId)]);
+  const askedRef = useRef(null);
+  useEffect(() => {
+    if (!examId || isFullyLoaded) return;
+    if (askedRef.current === examId) return; // طلب واحد لكل مادة
+    askedRef.current = examId;
+    dispatch(fetch_one_subject({ _id: examId, scope: "full" }));
+  }, [examId, isFullyLoaded, dispatch]);
 
   const DRAFT_STORAGE_KEY = "exam_draft_";
   const draftKey = examId
     ? `${DRAFT_STORAGE_KEY}${examId}`
     : `${DRAFT_STORAGE_KEY}new`;
 
-  const [questions, setQuestions] = useState([
-    { question: "", options: ["", "", "", ""], answer: 0, lecture: "" },
-  ]);
+  const [formData, setFormData] = useState({
+    name: "",
+    college_id: "",
+    info: "",
+    available_to: [],
+    price: "",
+    price_moadal: "",
+    questions: [
+      { question: "", options: ["", "", "", ""], answer: 0, lecture: "" },
+    ],
+    summary: [],
+  });
 
-  // تحميل الأسئلة (من مسودة محفوظة أو من المادة)
+  const [moveToPosition, setMoveToPosition] = useState({});
+  const [showSuggestions, setShowSuggestions] = useState(null);
+  const [qSearch, setQSearch] = useState("");
+  const [lectureOrder, setLectureOrder] = useState([]);
+
+  // Load draft on mount
   useEffect(() => {
     const loadDraft = () => {
       try {
@@ -128,18 +170,25 @@ const ExamEditor = () => {
           );
           if (shouldRestore) {
             const draft = JSON.parse(savedDraft);
-            setQuestions(draft.questions || []);
-            return;
+            setFormData(draft);
+          } else {
+            localStorage.removeItem(draftKey);
+            if (examToEdit) {
+              setFormData({
+                ...examToEdit,
+                available_to: Array.isArray(examToEdit.available_to)
+                  ? (Array.isArray(examToEdit.available_to) ? examToEdit.available_to : []).join(", ")
+                  : examToEdit.available_to,
+              });
+            }
           }
-          localStorage.removeItem(draftKey);
-        }
-        if (examToEdit) {
-          setQuestions(
-            examToEdit.questions.map((q) => ({
-              ...q,
-              lecture: q.lecture || "",
-            })),
-          );
+        } else if (examToEdit) {
+          setFormData({
+            ...examToEdit,
+            available_to: Array.isArray(examToEdit.available_to)
+              ? (Array.isArray(examToEdit.available_to) ? examToEdit.available_to : []).join(", ")
+              : examToEdit.available_to,
+          });
         }
       } catch (error) {
         console.error("Error loading draft:", error);
@@ -148,40 +197,20 @@ const ExamEditor = () => {
     loadDraft();
   }, [examToEdit, draftKey]);
 
-  // حفظ المسودة بعد فترة من آخر تغيير → تتبدّل الحالة إلى "محفوظ"
+  // Auto-save every 5 seconds
   useEffect(() => {
     if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
-    autoSaveTimeoutRef.current = setTimeout(() => saveDraft(), AUTOSAVE_DELAY_MS);
+    autoSaveTimeoutRef.current = setTimeout(() => saveDraft(), 5000);
     return () => {
       if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
     };
-  }, [questions]);
-
-  // العداد: يعمل فقط أثناء "غير محفوظ"
-  useEffect(() => {
-    if (!isSaved) {
-      if (!elapsedIntervalRef.current) {
-        elapsedIntervalRef.current = setInterval(() => {
-          setElapsedSeconds((s) => s + 1);
-        }, 1000);
-      }
-    } else if (elapsedIntervalRef.current) {
-      clearInterval(elapsedIntervalRef.current);
-      elapsedIntervalRef.current = null;
-    }
-    return () => {
-      if (elapsedIntervalRef.current) {
-        clearInterval(elapsedIntervalRef.current);
-        elapsedIntervalRef.current = null;
-      }
-    };
-  }, [isSaved]);
+  }, [formData]);
 
   const saveDraft = () => {
     try {
       localStorage.setItem(
         draftKey,
-        JSON.stringify({ questions, savedAt: new Date().toISOString() }),
+        JSON.stringify({ ...formData, savedAt: new Date().toISOString() }),
       );
       setIsSaved(true);
     } catch (error) {
@@ -198,127 +227,260 @@ const ExamEditor = () => {
     }
   };
 
-  // أي تعديل يجعل الحالة "غير محفوظ" ويبدأ العداد عند أول مرة
-  const markUnsaved = useCallback(() => {
-    setIsSaved(false);
-  }, []);
-
   const allLectures = useMemo(() => {
-    const lectures = questions
+    // الأسئلة لم تعد تُحمَّل في هذا المحرّر (صارت داخل المحاضرات)، فالحقل
+    // قد يكون undefined — والقراءة منه مباشرةً تُسقط الشاشة كلها.
+    const lectures = (Array.isArray(formData.questions) ? formData.questions : [])
       .map((q) => q.lecture)
       .filter((l) => l && l.trim() !== "");
     return Array.from(new Set(lectures));
-  }, [questions]);
+  }, [formData.questions]);
 
-  // إحصاء عدد الأسئلة لكل محاضرة
-  const lectureStats = useMemo(() => {
-    const stats = {};
-    questions.forEach((q) => {
-      const lecture = q.lecture || "بدون محاضرة";
-      stats[lecture] = (stats[lecture] || 0) + 1;
-    });
-    return stats;
-  }, [questions]);
-
-  // الأسئلة المعروضة حسب التصفية (مع الاحتفاظ بالفهرس الأصلي)
-  const filteredQuestions = useMemo(() => {
-    return questions
-      .map((q, idx) => ({ question: q, originalIndex: idx }))
-      .filter(
-        (item) =>
-          selectedLecture === "الكل" ||
-          (item.question.lecture || "بدون محاضرة") === selectedLecture,
+  // الأسئلة المعروضة مع فهرسها الأصلي.
+  // التصفية تغيّر ما يُرى لا ما هو مخزَّن: كل زر (حذف، نقل، تعديل، إضافة بعده)
+  // يستقبل الفهرس الحقيقي، فالبحث لا يستطيع أن يحذف السؤال الخطأ.
+  const visibleQuestions = useMemo(() => {
+    const all = (Array.isArray(formData.questions) ? formData.questions : []).map((question, originalIndex) => ({
+      question,
+      originalIndex,
+    }));
+    const terms = normAr(qSearch).split(" ").filter(Boolean);
+    if (terms.length === 0) return all;
+    return all.filter(({ question: q }) => {
+      const hay = normAr(
+        `${q?.question || ""} ${(q?.options || []).join(" ")}`,
       );
-  }, [questions, selectedLecture]);
+      // كل الكلمات مطلوبة: «سرطان جلد» تجد «سرطان الجلد»
+      return terms.every((t) => hay.includes(t));
+    });
+  }, [formData.questions, qSearch]);
 
-  const handleQuestionChange = useCallback(
-    (index, field, value) => {
-      setQuestions((prev) => {
-        const updated = [...prev];
-        updated[index] = { ...updated[index], [field]: value };
+  const handleChange = useCallback((name, value) => {
+    setFormData((prev) => ({ ...prev, [name]: value }));
+    setIsSaved(false);
+  }, []);
+
+  // ─── Rename callbacks for LectureLinkPanel ────────────────────────────────
+
+  /**
+   * Renames oldName → newName inside formData.summary
+   * Works by finding the right key (meta.lecture_title / lecture_title / title)
+   * and updating it.
+   */
+  const handleRenameInSummary = useCallback((oldName, newName) => {
+    setFormData((prev) => {
+      const updatedSummary = (Array.isArray(prev.summary) ? prev.summary : []).map((lecture) => {
+        const title = getSummaryTitle(lecture);
+        if (title !== oldName) return lecture;
+
+        // Deep-clone and update whichever key holds the title
+        const updated = JSON.parse(JSON.stringify(lecture));
+        if (updated.meta?.lecture_title !== undefined) {
+          updated.meta.lecture_title = newName;
+        } else if (updated.lecture_title !== undefined) {
+          updated.lecture_title = newName;
+        } else if (updated.title !== undefined) {
+          updated.title = newName;
+        }
         return updated;
       });
-      markUnsaved();
-    },
-    [markUnsaved],
-  );
+      return { ...prev, summary: updatedSummary };
+    });
+    setIsSaved(false);
+  }, []);
+
+  /**
+   * Renames oldName → newName inside ALL questions that have lecture === oldName
+   */
+  const handleRenameInQuestions = useCallback((oldName, newName) => {
+    setFormData((prev) => {
+      const updatedQuestions = (Array.isArray(prev.questions) ? prev.questions : []).map((q) =>
+        q.lecture?.trim() === oldName ? { ...q, lecture: newName } : q,
+      );
+      return { ...prev, questions: updatedQuestions };
+    });
+    setIsSaved(false);
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  const handleQuestionChange = useCallback((index, field, value) => {
+    setFormData((prev) => {
+      const updatedQuestions = [...prev.questions];
+      updatedQuestions[index] = { ...updatedQuestions[index], [field]: value };
+      return { ...prev, questions: updatedQuestions };
+    });
+    setIsSaved(false);
+  }, []);
 
   const handleOptionChange = useCallback(
     (questionIndex, optionIndex, value) => {
-      setQuestions((prev) => {
-        const updated = [...prev];
-        const updatedOptions = [...updated[questionIndex].options];
+      setFormData((prev) => {
+        const updatedQuestions = [...prev.questions];
+        const updatedOptions = [...updatedQuestions[questionIndex].options];
         updatedOptions[optionIndex] = value;
-        updated[questionIndex] = {
-          ...updated[questionIndex],
+        updatedQuestions[questionIndex] = {
+          ...updatedQuestions[questionIndex],
           options: updatedOptions,
         };
-        return updated;
+        return { ...prev, questions: updatedQuestions };
       });
-      markUnsaved();
+      setIsSaved(false);
     },
-    [markUnsaved],
+    [],
   );
 
-  const handleCorrectOptionChange = useCallback(
-    (questionIndex, value) => {
-      setQuestions((prev) => {
-        const updated = [...prev];
-        updated[questionIndex] = { ...updated[questionIndex], answer: value };
-        return updated;
-      });
-      markUnsaved();
-    },
-    [markUnsaved],
-  );
-
-  // السؤال الجديد يرث المحاضرة المُصفّاة حالياً (مثل QWCP)
-  const newQuestionTemplate = () => ({
-    question: "",
-    options: ["", "", "", ""],
-    answer: 0,
-    lecture: selectedLecture !== "الكل" ? selectedLecture : "",
-  });
+  const handleCorrectOptionChange = useCallback((questionIndex, value) => {
+    setFormData((prev) => {
+      const updatedQuestions = [...prev.questions];
+      updatedQuestions[questionIndex] = {
+        ...updatedQuestions[questionIndex],
+        answer: value,
+      };
+      return { ...prev, questions: updatedQuestions };
+    });
+    setIsSaved(false);
+  }, []);
 
   const addQuestion = () => {
-    setQuestions((prev) => [...prev, newQuestionTemplate()]);
-    markUnsaved();
+    setQSearch(""); // السؤال الجديد فارغ فلا يطابق أي بحث — نكشفه بدل أن يختفي
+    setFormData((prev) => ({
+      ...prev,
+      questions: [
+        ...prev.questions,
+        { question: "", options: ["", "", "", ""], answer: 0, lecture: "" },
+      ],
+    }));
+    setIsSaved(false);
   };
 
   const addQuestionAfter = (index) => {
-    setQuestions((prev) => {
-      const updated = [...prev];
-      updated.splice(index + 1, 0, newQuestionTemplate());
-      return updated;
+    setQSearch("");
+    setFormData((prev) => {
+      const newQuestions = [...prev.questions];
+      newQuestions.splice(index + 1, 0, {
+        question: "",
+        options: ["", "", "", ""],
+        answer: 0,
+        lecture: "",
+      });
+      return { ...prev, questions: newQuestions };
     });
-    markUnsaved();
+    setIsSaved(false);
   };
 
   const removeQuestion = (index) => {
-    if (questions.length <= 1) {
+    if ((Array.isArray(formData.questions) ? formData.questions : []).length <= 1) {
       alert("يجب أن يحتوي المادة على سؤال واحد على الأقل");
       return;
     }
-    setQuestions((prev) => prev.filter((_, i) => i !== index));
-    markUnsaved();
+    setFormData((prev) => ({
+      ...prev,
+      questions: (Array.isArray(prev.questions) ? prev.questions : []).filter((_, i) => i !== index),
+    }));
+    setIsSaved(false);
   };
 
-  // ─── لصق الأسئلة ─────────────────────────────────────────────────────────────
+  const moveQuestionUp = (index) => {
+    if (index === 0) return;
+    setFormData((prev) => {
+      const q = [...prev.questions];
+      [q[index - 1], q[index]] = [q[index], q[index - 1]];
+      return { ...prev, questions: q };
+    });
+    setIsSaved(false);
+  };
+
+  const moveQuestionDown = (index) => {
+    if (index === (Array.isArray(formData.questions) ? formData.questions : []).length - 1) return;
+    setFormData((prev) => {
+      const q = [...prev.questions];
+      [q[index], q[index + 1]] = [q[index + 1], q[index]];
+      return { ...prev, questions: q };
+    });
+    setIsSaved(false);
+  };
+
+  const moveQuestionToPosition = (currentIndex, newPosition) => {
+    const targetIndex = parseInt(newPosition) - 1;
+    if (
+      isNaN(targetIndex) ||
+      targetIndex < 0 ||
+      targetIndex >= (Array.isArray(formData.questions) ? formData.questions : []).length
+    ) {
+      alert(`الرجاء إدخال رقم صحيح بين 1 و ${(Array.isArray(formData.questions) ? formData.questions : []).length}`);
+      return;
+    }
+    if (currentIndex === targetIndex) return;
+    setFormData((prev) => {
+      const q = [...prev.questions];
+      const [moved] = q.splice(currentIndex, 1);
+      q.splice(targetIndex, 0, moved);
+      return { ...prev, questions: q };
+    });
+    setMoveToPosition((prev) => ({ ...prev, [currentIndex]: "" }));
+    setIsSaved(false);
+  };
+
+  const openSortModal = () => {
+    setLectureOrder([...allLectures]);
+    setShowSortModal(true);
+  };
+  const moveLectureUp = (i) => {
+    if (i === 0) return;
+    setLectureOrder((p) => {
+      const a = [...p];
+      [a[i - 1], a[i]] = [a[i], a[i - 1]];
+      return a;
+    });
+  };
+  const moveLectureDown = (i) => {
+    if (i === lectureOrder.length - 1) return;
+    setLectureOrder((p) => {
+      const a = [...p];
+      [a[i], a[i + 1]] = [a[i + 1], a[i]];
+      return a;
+    });
+  };
+  const applySortByLecture = () => {
+    setFormData((prev) => {
+      const byLecture = {};
+      const noLecture = [];
+      (Array.isArray(prev.questions) ? prev.questions : []).forEach((q) => {
+        if (q.lecture?.trim()) {
+          (byLecture[q.lecture] ??= []).push(q);
+        } else noLecture.push(q);
+      });
+      const sorted = [];
+      lectureOrder.forEach((l) => {
+        if (byLecture[l]) sorted.push(...byLecture[l]);
+      });
+      sorted.push(...noLecture);
+      return { ...prev, questions: sorted };
+    });
+    setShowSortModal(false);
+    setIsSaved(false);
+    alert("✅ تم ترتيب الأسئلة حسب المحاضرة بنجاح");
+  };
+
+  // ─── معالجة لصق الأسئلة ─────────────────────────────────────────────────────
+
   const parsePastedQuestions = useCallback((text) => {
     const lines = text.split("\n").map((l) => l.trim());
-    const parsed = [];
+    const questions = [];
     let currentLecture = "";
     let currentBlock = [];
 
     const flushBlock = () => {
       if (currentBlock.length === 0) return;
+
       if (currentBlock.length === 6) {
         currentLecture = currentBlock[0];
         const qText = currentBlock[1];
         const opts = currentBlock.slice(2, 6);
-        const answerIdx = opts.findIndex((o) => /[✅☑️✓✔]/u.test(o));
-        const cleanOpts = opts.map((o) => o.replace(/[✅☑️✓✔]/gu, "").trim());
-        parsed.push({
+        const answerIdx = opts.findIndex((o) => /✅|☑️|✓|✔/u.test(o));
+        const cleanOpts = opts.map((o) => o.replace(/✅|☑️|✓|✔/gu, "").trim());
+        questions.push({
           lecture: currentLecture,
           question: qText,
           options: cleanOpts.length === 4 ? cleanOpts : ["", "", "", ""],
@@ -327,9 +489,9 @@ const ExamEditor = () => {
       } else if (currentBlock.length === 5) {
         const qText = currentBlock[0];
         const opts = currentBlock.slice(1, 5);
-        const answerIdx = opts.findIndex((o) => /[✅☑️✓✔]/u.test(o));
-        const cleanOpts = opts.map((o) => o.replace(/[✅☑️✓✔]/gu, "").trim());
-        parsed.push({
+        const answerIdx = opts.findIndex((o) => /✅|☑️|✓|✔/u.test(o));
+        const cleanOpts = opts.map((o) => o.replace(/✅|☑️|✓|✔/gu, "").trim());
+        questions.push({
           lecture: currentLecture,
           question: qText,
           options: cleanOpts.length === 4 ? cleanOpts : ["", "", "", ""],
@@ -337,19 +499,24 @@ const ExamEditor = () => {
         });
       } else if (
         currentBlock.length === 1 &&
-        !/[✅☑️✓✔]/u.test(currentBlock[0])
+        !/✅|☑️|✓|✔/u.test(currentBlock[0])
       ) {
         currentLecture = currentBlock[0];
       }
+
       currentBlock = [];
     };
 
     for (const line of lines) {
-      if (line === "") flushBlock();
-      else currentBlock.push(line);
+      if (line === "") {
+        flushBlock();
+      } else {
+        currentBlock.push(line);
+      }
     }
     flushBlock();
-    return parsed;
+
+    return questions;
   }, []);
 
   const handlePasteImport = useCallback(() => {
@@ -360,122 +527,234 @@ const ExamEditor = () => {
       );
       return;
     }
-    setQuestions((prev) => [...prev, ...parsed]);
+    setFormData((prev) => ({
+      ...prev,
+      questions: [...prev.questions, ...parsed],
+    }));
     setPastedText("");
     setShowPasteModal(false);
-    markUnsaved();
+    setIsSaved(false);
     alert(`✅ تم استيراد ${parsed.length} سؤال بنجاح`);
-  }, [pastedText, parsePastedQuestions, markUnsaved]);
+  }, [pastedText, parsePastedQuestions]);
 
   const handleSubmit = async () => {
-    if (!examToEdit) {
-      alert("❌ تعذر تحديد المادة");
+    // حارس فقدان البيانات: الحفظ من نموذج بُني على مادة لم تكتمل يمحو
+    // الأسئلة والمشتركين، لأن Update_Exam يُسنِد المصفوفات بلا شرط.
+    if (isLoadingSubject) {
+      alert("لم تكتمل بيانات المادة بعد — انتظر التحميل قبل الحفظ");
       return;
     }
-    const invalid = questions.filter(
-      (q) => !q.question || q.options.some((o) => !o),
+    if (!formData.name || !formData.info) {
+      alert("يرجى ملء جميع الحقول المطلوبة");
+      return;
+    }
+    const invalid = (Array.isArray(formData.questions) ? formData.questions : []).filter(
+      (q) => !q.question || (Array.isArray(q.options) ? q.options : []).some((o) => !o),
     );
     if (invalid.length > 0) {
       alert("يرجى ملء جميع الأسئلة والخيارات");
       return;
     }
-
-    // أوقف العداد والتقط القيمة النهائية
-    if (elapsedIntervalRef.current) {
-      clearInterval(elapsedIntervalRef.current);
-      elapsedIntervalRef.current = null;
-    }
-    const finalElapsed = elapsedSeconds;
-
     try {
-      // تصنيفات جلسة التعديل — تُخزَّن في كولكشن مستقل، والأسئلة تُرسل نظيفة
-      const new_classifications = Array.isArray(examToEdit.questions)
-        ? buildClassificationSnapshot(examToEdit.questions, questions)
-        : [];
-      await dispatch(
-        update_exam({
-          _id: examToEdit._id,
-          new_questions: questions,
-          new_classifications,
-          employer_id: employer?._id,
-          elapsed_seconds: finalElapsed,
-        }),
-      ).unwrap();
+      const payload = {
+        name: formData.name,
+        info: formData.info,
+        questions: formData.questions,
+        price: formData.price || 0,
+        price_moadal: formData.price_moadal || 0,
+        available_to:
+          typeof formData.available_to === "string"
+            ? formData.available_to.split(",").map((s) => s.trim())
+            : formData.available_to,
+        summary: Array.isArray(formData.summary) ? formData.summary : [],
+      };
+      if (isEditing) {
+        await dispatch(
+          update_exam({
+            _id: examToEdit._id,
+            new_name: payload.name,
+            new_info: payload.info,
+            // الأسئلة والملخص لم يعودا على مستوى المادة بعد الهجرة —
+            // صارا داخل كل محاضرة. إرسالهما من هنا يُعيد بناء الحقلين
+            // الميتين ويوهم بمصدرين للحقيقة. التعديل من مساحة العمل.
+            new_price: payload.price,
+            new_price_moadal: payload.price_moadal,
+            new_available_to: payload.available_to,
+          }),
+        ).unwrap();
+      } else {
+        await dispatch(
+          add_exam({
+            ...payload,
+            college_id: formData.college_id,
+            admin_id: "6934998caad4fa6ea1e59d31",
+          }),
+        ).unwrap();
+      }
 
       deleteDraft();
-      setIsSaved(true);
-      setElapsedSeconds(0);
-      alert("✅ تم حفظ تعديلات الأسئلة بنجاح");
+      alert(
+        isEditing ? "✅ تم تحديث الامتحان بنجاح" : "✅ تم إنشاء المادة بنجاح",
+      );
       navigate("/exams");
     } catch (error) {
       alert(
-        `❌ ${error?.message || error?.error?.message || error || "حدث خطأ أثناء الإرسال"}`,
+        `❌ ${error.message || error.error?.message || "حدث خطأ أثناء الإرسال"}`,
       );
     }
   };
 
-  const renderQuestion = (item) => {
-    const { question, originalIndex } = item;
-    const displayNumber =
-      selectedLecture === "الكل"
-        ? originalIndex + 1
-        : filteredQuestions.findIndex(
-            (f) => f.originalIndex === originalIndex,
-          ) + 1;
+  const exportExamAsJSON = () => {
+    const data = {
+      ...formData,
+      available_to:
+        typeof formData.available_to === "string"
+          ? formData.available_to.split(",").map((s) => s.trim())
+          : formData.available_to,
+      exportDate: new Date().toISOString(),
+      version: "1.0",
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${formData.name || "exam"}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const getSuggestions = useCallback(
+    (val) => {
+      if (!val?.trim()) return [];
+      return allLectures.filter(
+        (l) => l.toLowerCase().includes(val.toLowerCase()) && l !== val,
+      );
+    },
+    [allLectures],
+  );
+
+  const renderQuestion = (question, qIndex) => {
+    const suggestions =
+      showSuggestions === qIndex ? getSuggestions(question.lecture) : [];
     return (
       <div
-        key={originalIndex}
+        key={qIndex}
         style={{ direction: "rtl" }}
-        className="p-3 sm:p-4 border border-gray-300 rounded-xl bg-white mx-2 sm:mx-3 mb-3 sm:mb-4 shadow-sm"
+        className="p-4 border border-gray-300 rounded-xl bg-white mx-3 mb-4 shadow-sm"
       >
-        {/* رأس السؤال: الرقم + المحاضرة (عرض فقط) + حذف */}
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-lg sm:text-xl font-bold text-[#8C52FF] shrink-0">
-            #{displayNumber}
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xl font-bold text-[#8C52FF]">
+            #{qIndex + 1}
           </span>
-          <div className="flex-1 min-w-0">
-            <div className="w-full bg-brand/10 border border-brand/20 px-2.5 py-1.5 rounded-lg text-center">
-              <span className="text-xs sm:text-sm font-bold text-brand break-words">
-                📚 {question.lecture?.trim() ? question.lecture : "بدون محاضرة"}
-              </span>
-            </div>
-          </div>
           <button
-            onClick={() => removeQuestion(originalIndex)}
-            className="px-2.5 sm:px-3 py-1.5 bg-red-50 rounded-lg border border-red-200 hover:bg-red-100 shrink-0"
+            onClick={() => removeQuestion(qIndex)}
+            className="px-3 py-1.5 bg-red-50 rounded-lg border border-red-200 hover:bg-red-100"
           >
             <span className="text-red-600 text-xs font-medium">حذف</span>
           </button>
         </div>
 
-        {/* نص السؤال */}
+        <div className="mb-3 p-3 bg-blue-50 rounded-xl border border-blue-200">
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="number"
+              value={moveToPosition[qIndex] || ""}
+              onChange={(e) =>
+                setMoveToPosition((p) => ({ ...p, [qIndex]: e.target.value }))
+              }
+              placeholder={`1-${(Array.isArray(formData.questions) ? formData.questions : []).length}`}
+              className="border border-blue-300 p-2 rounded-lg text-sm w-20 bg-white"
+            />
+            <button
+              onClick={() =>
+                moveQuestionToPosition(qIndex, moveToPosition[qIndex])
+              }
+              className="bg-[#8C52FF] px-3 py-2 rounded-lg flex items-center gap-1 hover:bg-purple-700"
+            >
+              <Move size={14} color="#ffffff" />
+              <span className="text-white text-xs font-medium">نقل</span>
+            </button>
+            <button
+              onClick={() => moveQuestionUp(qIndex)}
+              disabled={qIndex === 0}
+              className="p-1 disabled:opacity-50"
+            >
+              <ArrowUp size={24} color={qIndex === 0 ? "#d1d5db" : "#3b82f6"} />
+            </button>
+            <button
+              onClick={() => moveQuestionDown(qIndex)}
+              disabled={qIndex === (Array.isArray(formData.questions) ? formData.questions : []).length - 1}
+              className="p-1 disabled:opacity-50"
+            >
+              <ArrowDown
+                size={24}
+                color={
+                  qIndex === (Array.isArray(formData.questions) ? formData.questions : []).length - 1
+                    ? "#d1d5db"
+                    : "#3b82f6"
+                }
+              />
+            </button>
+          </div>
+        </div>
+
+        <div className="mb-3 relative">
+          <input
+            value={question.lecture}
+            onChange={(e) => {
+              handleQuestionChange(qIndex, "lecture", e.target.value);
+              setShowSuggestions(e.target.value.trim() ? qIndex : null);
+            }}
+            onBlur={() => setTimeout(() => setShowSuggestions(null), 1000)}
+            className="w-full border-2 text-base border-purple-300 bg-purple-50 p-2 rounded-xl"
+            placeholder="📚 اسم المحاضرة"
+          />
+          {suggestions.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-purple-200 rounded-lg shadow-lg z-50 max-h-32 overflow-y-auto">
+              {suggestions.map((s, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    handleQuestionChange(qIndex, "lecture", s);
+                    setShowSuggestions(null);
+                  }}
+                  className="w-full p-3 border-b border-gray-100 text-left hover:bg-purple-50"
+                >
+                  <span className="text-sm text-gray-700">{s}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="mb-3">
           <textarea
             value={question.question}
             onChange={(e) =>
-              handleQuestionChange(originalIndex, "question", e.target.value)
+              handleQuestionChange(qIndex, "question", e.target.value)
             }
-            className="w-full border-2 border-blue-400 bg-blue-50 p-2 rounded-xl text-sm sm:text-base font-medium"
+            className="w-full border-2 border-blue-400 bg-blue-50 p-2 rounded-xl text-base font-medium"
             placeholder="❓ نص السؤال"
             rows={3}
           />
         </div>
 
-        {/* الخيارات */}
         <div className="gap-2 mb-4 space-y-2">
-          {question.options.map((option, optIndex) => (
+          {(Array.isArray(question.options) ? question.options : []).map((option, optIndex) => (
             <div key={optIndex} className="flex items-center gap-2">
-              <div className="w-7 h-7 sm:w-8 sm:h-8 bg-gray-200 rounded-full flex items-center justify-center shrink-0">
-                <span className="text-xs sm:text-sm font-bold text-gray-600">
+              <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
+                <span className="text-sm font-bold text-gray-600">
                   {optIndex + 1}
                 </span>
               </div>
               <textarea
                 value={option}
                 onChange={(e) =>
-                  handleOptionChange(originalIndex, optIndex, e.target.value)
+                  handleOptionChange(qIndex, optIndex, e.target.value)
                 }
-                className="flex-1 border border-gray-300 bg-gray-50 p-2 rounded-lg text-sm sm:text-base"
+                className="flex-1 border border-gray-300 bg-gray-50 p-2 rounded-lg text-base"
                 placeholder={`الخيار ${optIndex + 1}`}
                 rows={2}
               />
@@ -483,14 +762,13 @@ const ExamEditor = () => {
           ))}
         </div>
 
-        {/* الإجابة الصحيحة */}
         <div className="mb-3">
           <div className="flex gap-2">
             {[1, 2, 3, 4].map((n) => (
               <button
                 key={n}
-                onClick={() => handleCorrectOptionChange(originalIndex, n)}
-                className={`flex-1 py-2.5 sm:py-3 rounded-lg font-bold text-sm sm:text-base ${
+                onClick={() => handleCorrectOptionChange(qIndex, n)}
+                className={`flex-1 py-3 rounded-lg font-bold ${
                   question.answer == n
                     ? "bg-green-500 text-white"
                     : "bg-gray-200 text-gray-600"
@@ -503,7 +781,7 @@ const ExamEditor = () => {
         </div>
 
         <button
-          onClick={() => addQuestionAfter(originalIndex)}
+          onClick={() => addQuestionAfter(qIndex)}
           className="w-full bg-green-500 px-3 py-2 rounded-lg flex items-center justify-center gap-1.5 hover:bg-green-600"
         >
           <Plus size={14} color="#ffffff" />
@@ -513,170 +791,215 @@ const ExamEditor = () => {
     );
   };
 
-  return (
-    <div className="flex-1 bg-gray-50 min-h-screen">
-      {/* شريط علوي ثابت */}
-      <div
-        style={{ direction: "rtl" }}
-        className="p-3 sm:p-4 space-y-3 sm:space-y-4 sticky top-0 bg-gray-50 z-20 border-b border-gray-100"
-      >
-        <div className="max-w-2xl mx-auto w-full space-y-3 sm:space-y-4">
-        <div className="flex items-center justify-between gap-2">
+  // شاشة انتظار صريحة بدل نموذج فارغ.
+  // النموذج الفارغ على مادة لم تصل كان يبدو «مادة بلا أسئلة»، وحفظه
+  // يمحو محتواها الحقيقي — فالانتظار هنا حارس بيانات لا تجميل.
+  if (isLoadingSubject) {
+    return (
+      <div className="flex-1 bg-gray-50 min-h-screen">
+        <div style={{ direction: "rtl" }} className="p-4 space-y-4">
           <button
             onClick={() => navigate("/exams")}
-            className="p-1.5 hover:bg-gray-200 rounded shrink-0"
+            className="p-1 hover:bg-gray-200 rounded"
           >
-            <ArrowRight size={22} color="#8C52FF" />
+            <ArrowRight size={24} color="#8C52FF" />
           </button>
-          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-end">
-            {/* عداد الوقت المنقضي */}
-            <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full">
-              <Timer size={15} color="#d97706" />
-              <span className="text-xs font-bold text-amber-700">
-                {formatElapsed(elapsedSeconds)}
-              </span>
-            </div>
-            {/* حالة الحفظ */}
-            <div className="flex items-center bg-gray-100 px-2.5 py-1 rounded-full">
+          <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
+            <div className="inline-block w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin mb-3" />
+            <p className="text-sm text-gray-600">جارٍ تحميل المادة…</p>
+            <p className="text-xs text-gray-400 mt-1">
+              لا تُحفظ أي تعديلات قبل اكتمال التحميل
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 bg-gray-50 min-h-screen">
+      <div style={{ direction: "rtl" }} className="p-4 gap-4 space-y-4">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => navigate("/exams")}
+            className="p-1 hover:bg-gray-200 rounded"
+          >
+            <ArrowRight size={24} color="#8C52FF" />
+          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center bg-gray-100 px-3 py-1 rounded-full">
               {isSaved ? (
-                <Cloud size={15} color="#10b981" />
+                <Cloud size={16} color="#10b981" />
               ) : (
-                <CloudOff size={15} color="#ef4444" />
+                <CloudOff size={16} color="#ef4444" />
               )}
               <span
                 className="text-xs ml-1"
                 style={{ color: isSaved ? "#10b981" : "#ef4444" }}
               >
-                {isSaved ? "محفوظ" : "غير محفوظ"}
+                {isSaved ? "محفوظ" : "جاري الحفظ..."}
               </span>
             </div>
+            <button
+              onClick={exportExamAsJSON}
+              className="bg-brand px-3 py-2 rounded-lg flex items-center gap-1.5 hover:opacity-90"
+            >
+              <Download size={16} color="#ffffff" />
+            </button>
           </div>
         </div>
 
-        {/* اسم المادة (للعرض فقط) */}
-        {examToEdit && (
-          <div className="bg-white border border-gray-200 rounded-lg p-2.5 sm:p-3">
-            <span className="text-xs text-gray-500">المادة: </span>
-            <span className="text-sm font-bold text-gray-800">
-              {examToEdit.name}
-            </span>
-          </div>
-        )}
-
-        {/* زر الحفظ */}
+        {/* Save button */}
         <button
           onClick={handleSubmit}
-          className="bg-[#8C52FF] py-2.5 sm:py-3 rounded-lg hover:bg-purple-700 disabled:opacity-50 w-full"
+          className="bg-[#8C52FF] py-3 rounded-lg hover:bg-purple-700 disabled:opacity-50 w-full"
           disabled={loading}
         >
-          <span className="text-white text-center text-sm sm:text-base font-semibold">
-            حفظ التغييرات
+          <span className="text-white text-center text-base font-semibold">
+            {isEditing ? "حفظ التغييرات" : "إنشاء المادة"}
           </span>
         </button>
-        </div>
       </div>
 
-      {/* ── تصفية حسب المحاضرة (مثل QWCP) ── */}
-      <div
-        style={{ direction: "rtl" }}
-        className="bg-white p-3 sm:p-4 border-b border-gray-200 mx-2 sm:mx-3 mt-3 rounded-xl border max-w-2xl lg:mx-auto"
-      >
-        <button
-          onClick={() => setShowLectureFilter((v) => !v)}
-          className="w-full flex items-center justify-between"
-        >
-          <div className="flex items-center gap-2">
-            <Filter size={18} color="#8C52FF" />
-            <span className="text-sm sm:text-base font-semibold text-gray-800">
-              تصفية حسب المحاضرة
-            </span>
-            {selectedLecture !== "الكل" && (
-              <span className="text-xs bg-brand/10 text-brand px-2 py-0.5 rounded-full font-bold">
-                {selectedLecture}
-              </span>
+      <div className="py-4 space-y-4 mx-auto">
+        <BasicFieldsSection
+          formData={formData}
+          handleChange={handleChange}
+          isEditing={isEditing}
+        />
+
+        {/* ── Lecture Link Panel ── يظهر دائماً بين الـ fields والـ mode switch */}
+        <LectureLinkPanel
+          formData={formData}
+          onRenameInSummary={handleRenameInSummary}
+          onRenameInQuestions={handleRenameInQuestions}
+        />
+
+        {/* المحتوى صار داخل كل محاضرة بعد توحيد الهيكل. هذا المحرّر
+            لحقول المادة وحدها — والأسئلة والملخص من مساحة العمل. */}
+        <div className="mx-3 p-4 rounded-2xl bg-brand/5 border border-brand/20">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="w-9 h-9 rounded-xl bg-brand/10 flex items-center justify-center shrink-0">
+              <Layers size={17} className="text-brand" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-800">
+                الأسئلة والملخص صارا داخل كل محاضرة
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                كل محتوى المحاضرة في مكان واحد: نصّ وملخص وأسئلة وبطاقات
+                وتحريري — والمطابقة بمعرّف المحاضرة لا بالاسم.
+              </p>
+            </div>
+            {isEditing && (
+              <button
+                type="button"
+                onClick={() => navigate(`/exams/work/${examId}`)}
+                className="mr-auto bg-brand text-white text-sm font-bold rounded-xl px-5 py-2.5 flex items-center gap-2 shrink-0"
+              >
+                <Layers size={16} /> افتح مساحة العمل
+              </button>
             )}
           </div>
-          <span className="text-gray-500 text-sm">
-            {showLectureFilter ? "▲" : "▼"}
-          </span>
-        </button>
-        {showLectureFilter && (
-          <div className="mt-3 overflow-x-auto">
-            <div className="flex flex-row gap-2 w-max pb-1">
-              <button
-                onClick={() => setSelectedLecture("الكل")}
-                className={`px-3 sm:px-4 py-2 rounded-lg border whitespace-nowrap text-sm font-medium ${
-                  selectedLecture === "الكل"
-                    ? "bg-[#8C52FF] border-[#8C52FF] text-white"
-                    : "bg-white border-gray-300 text-gray-700"
-                }`}
-              >
-                الكل ({questions.length})
-              </button>
-              {Object.keys(lectureStats).map((l) => (
-                <button
-                  key={l}
-                  onClick={() => setSelectedLecture(l)}
-                  className={`px-3 sm:px-4 py-2 rounded-lg border whitespace-nowrap text-sm font-medium ${
-                    selectedLecture === l
-                      ? "bg-[#8C52FF] border-[#8C52FF] text-white"
-                      : "bg-white border-gray-300 text-gray-700"
-                  }`}
-                >
-                  {l} ({lectureStats[l]})
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* قائمة الأسئلة المُصفّاة */}
-      <div className="py-3 sm:py-4 max-w-2xl mx-auto w-full">
-        {filteredQuestions.map((item) => renderQuestion(item))}
-
-        {/* أزرار الإجراءات */}
-        <div className="p-3 sm:p-4 gap-3 space-y-3 max-w-2xl mx-auto">
-          <button
-            onClick={() => setShowPasteModal(true)}
-            className="w-full bg-indigo-500 py-2.5 sm:py-3 rounded-lg flex items-center justify-center gap-1.5 hover:bg-indigo-600"
-          >
-            <ClipboardPaste size={18} color="#ffffff" />
-            <span className="text-white font-medium text-sm sm:text-base">
-              📋 لصق أسئلة من النص
-            </span>
-          </button>
-          <button
-            onClick={addQuestion}
-            className="w-full bg-green-500 py-2.5 sm:py-3 rounded-lg flex items-center justify-center gap-1.5 hover:bg-green-600"
-          >
-            <Plus size={18} color="#ffffff" />
-            <span className="text-white font-medium text-sm sm:text-base">
-              إضافة سؤال
-            </span>
-          </button>
-          <button
-            onClick={handleSubmit}
-            className="w-full bg-[#8C52FF] py-2.5 sm:py-3 rounded-lg flex items-center justify-center gap-1.5 hover:bg-purple-700 disabled:opacity-50"
-            disabled={loading}
-          >
-            <Save size={18} color="#ffffff" />
-            <span className="text-white font-medium text-sm sm:text-base">
-              حفظ التغييرات
-            </span>
-          </button>
         </div>
+
+
       </div>
 
-      {/* ─── Paste Questions Modal ─── */}
-      {showPasteModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-3 sm:p-4">
+      {/* ─── Sort Modal ─────────────────────────────────────────────────────── */}
+      {showSortModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div
             style={{ direction: "rtl" }}
-            className="bg-white rounded-xl p-4 sm:p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl"
+            className="bg-white rounded-xl p-6 max-w-md w-full max-h-[80vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base sm:text-lg font-bold text-gray-800">
+              <h3 className="text-lg font-bold text-gray-800">
+                ترتيب المحاضرات
+              </h3>
+              <button
+                onClick={() => setShowSortModal(false)}
+                className="p-1 hover:bg-gray-100 rounded"
+              >
+                <X size={20} color="#666" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              رتب المحاضرات بالترتيب الذي تريده.
+            </p>
+            <div className="space-y-2">
+              {lectureOrder.map((lecture, index) => (
+                <div
+                  key={index}
+                  className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg border border-gray-200"
+                >
+                  <div className="flex flex-col gap-1">
+                    <button
+                      onClick={() => moveLectureUp(index)}
+                      disabled={index === 0}
+                      className="p-1 disabled:opacity-30"
+                    >
+                      <ArrowUp
+                        size={16}
+                        color={index === 0 ? "#d1d5db" : "#3b82f6"}
+                      />
+                    </button>
+                    <button
+                      onClick={() => moveLectureDown(index)}
+                      disabled={index === lectureOrder.length - 1}
+                      className="p-1 disabled:opacity-30"
+                    >
+                      <ArrowDown
+                        size={16}
+                        color={
+                          index === lectureOrder.length - 1
+                            ? "#d1d5db"
+                            : "#3b82f6"
+                        }
+                      />
+                    </button>
+                  </div>
+                  <div className="flex-1">
+                    <span className="text-sm font-medium text-gray-700">
+                      {lecture}
+                    </span>
+                  </div>
+                  <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
+                    <span className="text-xs font-bold text-purple-600">
+                      {index + 1}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 mt-6">
+              <button
+                onClick={() => setShowSortModal(false)}
+                className="flex-1 bg-gray-200 py-2 rounded-lg hover:bg-gray-300"
+              >
+                <span className="text-gray-700 font-medium">إلغاء</span>
+              </button>
+              <button
+                onClick={applySortByLecture}
+                className="flex-1 bg-blue-500 py-2 rounded-lg hover:bg-blue-600"
+              >
+                <span className="text-white font-medium">تطبيق الترتيب</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Paste Questions Modal ────────────────────────────────────────── */}
+      {showPasteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div
+            style={{ direction: "rtl" }}
+            className="bg-white rounded-xl p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-800">
                 📋 لصق أسئلة من النص
               </h3>
               <button
@@ -690,12 +1013,13 @@ const ExamEditor = () => {
               </button>
             </div>
 
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4 text-xs sm:text-sm text-yellow-800 leading-relaxed">
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4 text-sm text-yellow-800 leading-relaxed">
               <p className="font-semibold mb-1">التنسيق المطلوب:</p>
               <ul className="list-disc pr-4 space-y-1">
                 <li>كل سؤال = 5 أسطر (السؤال + 4 خيارات)</li>
                 <li>
-                  إذا أردت تغيير المحاضرة ضع اسمها في سطر قبل السؤال (يصبح 6 أسطر)
+                  إذا أردت تغيير المحاضرة ضع اسمها في سطر قبل السؤال (يصبح 6
+                  أسطر)
                 </li>
                 <li>ضع علامة ✅ بجانب الخيار الصحيح</li>
                 <li>افصل بين الأسئلة بسطر فارغ</li>
