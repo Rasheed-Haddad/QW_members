@@ -1,5 +1,5 @@
 import axios from "axios";
-import { Check, ChevronDown, Loader2, Save } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { API_BASE_URL, PASSWORD } from "../../config";
 import { getSubject, SCOPE } from "./v2api";
@@ -118,86 +118,8 @@ export default function SubjectFieldsPanel({ subjectId, onRenamed }) {
             }`}
           />
           <span className="text-sm font-bold text-gray-800">بيانات المادة</span>
-          <span className="text-xs text-gray-400">
-            الاسم والسعران والكلية والوصف
-          </span>
         </button>
       </div>
-
-      {open && (
-        <div className="px-4 pb-4 pt-1 border-t border-gray-100">
-          {loading ? (
-            <p className="text-sm text-gray-400 py-6 text-center">
-              جارٍ الجلب…
-            </p>
-          ) : form ? (
-            <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-                {FIELDS.map((f) => (
-                  <label key={f.name} className="block">
-                    <span className="text-xs text-gray-500">{f.label}</span>
-                    <input
-                      value={form[f.name] ?? ""}
-                      onChange={(e) => set(f.name, e.target.value)}
-                      inputMode={f.numeric ? "numeric" : undefined}
-                      className="w-full mt-1 px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-brand"
-                    />
-                  </label>
-                ))}
-              </div>
-
-              <label className="block mt-3">
-                <span className="text-xs text-gray-500">وصف المادة</span>
-                <textarea
-                  value={form.info}
-                  onChange={(e) => set("info", e.target.value)}
-                  rows={2}
-                  className="w-full mt-1 px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-brand"
-                />
-              </label>
-
-              <label className="block mt-3">
-                <span className="text-xs text-gray-500">
-                  الطلاب المسجَّلون (أرقام مفصولة بفاصلة)
-                </span>
-                <textarea
-                  dir="ltr"
-                  value={form.available_to}
-                  onChange={(e) => set("available_to", e.target.value)}
-                  rows={2}
-                  className="w-full mt-1 px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-brand"
-                />
-              </label>
-
-              {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
-
-              <button
-                onClick={save}
-                disabled={saving}
-                className={`mt-3 w-full py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 ${
-                  saved
-                    ? "bg-green-600 text-white"
-                    : "bg-brand text-white disabled:opacity-50"
-                }`}
-              >
-                {saving ? (
-                  <Loader2 size={15} className="animate-spin" />
-                ) : saved ? (
-                  <>
-                    <Check size={15} /> حُفظ
-                  </>
-                ) : (
-                  <>
-                    <Save size={15} /> حفظ بيانات المادة
-                  </>
-                )}
-              </button>
-            </>
-          ) : (
-            error && <p className="text-xs text-red-600 py-4">{error}</p>
-          )}
-        </div>
-      )}
     </div>
   );
 }
