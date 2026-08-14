@@ -1,23 +1,22 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { useSelector, useDispatch } from "react-redux";
-import { useNavigate, Link } from "react-router-dom";
 import {
+  AlertCircle,
+  CheckSquare,
+  Edit,
+  Factory,
+  Info,
   Plus,
   Search,
-  Edit,
-  Trash2,
-  AlertCircle,
-  XCircle,
-  Info,
-  CheckSquare,
   Square,
-  Factory,
+  XCircle,
 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { Link, useNavigate } from "react-router-dom";
 import {
-  delete_exam,
-  clearError,
-  set_new_data_of_exam,
   add_student_to_exam,
+  clearError,
+  delete_exam,
+  set_new_data_of_exam,
 } from "../../store/examsSlice.js";
 import EditScopeModal from "./EditScopeModal.jsx";
 import SubjectScopePicker from "./SubjectScopePicker.jsx";
@@ -239,17 +238,7 @@ const ExamsList = () => {
             <Edit size={16} color="#ca8a04" />
             <span className="text-sm font-medium text-yellow-600">تعديل</span>
           </button>
-          {/* ✅ زر الحذف مع مسافة إضافية */}
-          <div className="ml-2">
-            <button
-              onClick={() => handleDeleteExam(exam._id)}
-              className="flex items-center justify-center p-2.5 rounded-md bg-red-50 hover:bg-red-100 transition-colors"
-            >
-              <Trash2 size={18} color="#dc2626" />
-            </button>
-          </div>
         </div>
-
       </div>
     );
   };
@@ -356,9 +345,7 @@ const ExamsList = () => {
             <input
               type="text"
               placeholder={
-                pick.collegeId
-                  ? "صفِّ مواد هذه الكلية…"
-                  : "اختر كليةً أولاً"
+                pick.collegeId ? "صفِّ مواد هذه الكلية…" : "اختر كليةً أولاً"
               }
               disabled={!pick.collegeId}
               className="flex-1 text-base text-gray-800 bg-transparent border-none outline-none disabled:cursor-not-allowed"
