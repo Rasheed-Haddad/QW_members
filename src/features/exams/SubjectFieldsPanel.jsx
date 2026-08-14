@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
 import axios from "axios";
-import { ChevronDown, Download, Loader2, Save, Check } from "lucide-react";
+import { Check, ChevronDown, Loader2, Save } from "lucide-react";
+import { useEffect, useState } from "react";
 import { API_BASE_URL, PASSWORD } from "../../config";
 import { getSubject, SCOPE } from "./v2api";
 
@@ -104,28 +104,6 @@ export default function SubjectFieldsPanel({ subjectId, onRenamed }) {
     }
   };
 
-  // التحميل يجلب المادة كاملةً (النطاق full) — لا ما هو معروض فقط
-  const exportJson = async () => {
-    setExporting(true);
-    setError(null);
-    try {
-      const full = await getSubject(subjectId, SCOPE.FULL);
-      const blob = new Blob([JSON.stringify(full, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${full.name || "subject"}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      setError(e?.response?.data?.message || "تعذّر تحميل الملف");
-    } finally {
-      setExporting(false);
-    }
-  };
-
   return (
     <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
       <div className="flex items-center">
@@ -144,27 +122,14 @@ export default function SubjectFieldsPanel({ subjectId, onRenamed }) {
             الاسم والسعران والكلية والوصف
           </span>
         </button>
-
-        {/* التحميل ظاهر دائماً — لا يشترط فتح اللوحة */}
-        <button
-          onClick={exportJson}
-          disabled={exporting}
-          title="تحميل المادة كاملةً بصيغة JSON"
-          className="mx-3 text-xs text-gray-600 border border-gray-200 rounded-xl px-3 py-2 flex items-center gap-1.5 hover:bg-gray-50 disabled:opacity-50"
-        >
-          {exporting ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <Download size={14} />
-          )}
-          JSON
-        </button>
       </div>
 
       {open && (
         <div className="px-4 pb-4 pt-1 border-t border-gray-100">
           {loading ? (
-            <p className="text-sm text-gray-400 py-6 text-center">جارٍ الجلب…</p>
+            <p className="text-sm text-gray-400 py-6 text-center">
+              جارٍ الجلب…
+            </p>
           ) : form ? (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
@@ -204,9 +169,7 @@ export default function SubjectFieldsPanel({ subjectId, onRenamed }) {
                 />
               </label>
 
-              {error && (
-                <p className="text-xs text-red-600 mt-2">{error}</p>
-              )}
+              {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
 
               <button
                 onClick={save}

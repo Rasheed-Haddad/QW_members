@@ -1,23 +1,22 @@
-import { useEffect, useState, useRef, useCallback, useMemo, memo } from "react";
-import { useDispatch, useSelector } from "react-redux";
 import {
-  update_exam,
-  add_exam,
-  fetch_one_subject,
-} from "../../store/examsSlice";
-import { useNavigate, useParams } from "react-router-dom";
-import {
-  ArrowRight,
-  Plus,
-  ArrowUp,
   ArrowDown,
-  Move,
-  Download,
+  ArrowRight,
+  ArrowUp,
   Cloud,
   CloudOff,
-  X,
   Layers,
+  Move,
+  Plus,
+  X,
 } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { useNavigate, useParams } from "react-router-dom";
+import {
+  add_exam,
+  fetch_one_subject,
+  update_exam,
+} from "../../store/examsSlice";
 import LectureLinkPanel from "./LectureLinkPanel"; // ← جديد
 
 // ─── تطبيع عربي للبحث ────────────────────────────────────────────────────────
@@ -39,7 +38,6 @@ const getSummaryTitle = (obj) =>
   obj?.meta?.lecture_title || obj?.lecture_title || obj?.title || null;
 
 // ─── ModeSwitch ────────────────────────────────────────────────────────────────
-
 
 // ─── BasicFieldsSection ────────────────────────────────────────────────────────
 
@@ -98,9 +96,7 @@ const ExamEditor = () => {
   const examId = params.id || params.examId || null;
 
   const dispatch = useDispatch();
-  const { exams, loading, full_loaded } = useSelector(
-    (state) => state.exams,
-  );
+  const { exams, loading, full_loaded } = useSelector((state) => state.exams);
 
   const [isSaved, setIsSaved] = useState(true);
   const autoSaveTimeoutRef = useRef(null);
@@ -177,7 +173,10 @@ const ExamEditor = () => {
               setFormData({
                 ...examToEdit,
                 available_to: Array.isArray(examToEdit.available_to)
-                  ? (Array.isArray(examToEdit.available_to) ? examToEdit.available_to : []).join(", ")
+                  ? (Array.isArray(examToEdit.available_to)
+                      ? examToEdit.available_to
+                      : []
+                    ).join(", ")
                   : examToEdit.available_to,
               });
             }
@@ -186,7 +185,10 @@ const ExamEditor = () => {
           setFormData({
             ...examToEdit,
             available_to: Array.isArray(examToEdit.available_to)
-              ? (Array.isArray(examToEdit.available_to) ? examToEdit.available_to : []).join(", ")
+              ? (Array.isArray(examToEdit.available_to)
+                  ? examToEdit.available_to
+                  : []
+                ).join(", ")
               : examToEdit.available_to,
           });
         }
@@ -230,7 +232,9 @@ const ExamEditor = () => {
   const allLectures = useMemo(() => {
     // الأسئلة لم تعد تُحمَّل في هذا المحرّر (صارت داخل المحاضرات)، فالحقل
     // قد يكون undefined — والقراءة منه مباشرةً تُسقط الشاشة كلها.
-    const lectures = (Array.isArray(formData.questions) ? formData.questions : [])
+    const lectures = (
+      Array.isArray(formData.questions) ? formData.questions : []
+    )
       .map((q) => q.lecture)
       .filter((l) => l && l.trim() !== "");
     return Array.from(new Set(lectures));
@@ -240,7 +244,9 @@ const ExamEditor = () => {
   // التصفية تغيّر ما يُرى لا ما هو مخزَّن: كل زر (حذف، نقل، تعديل، إضافة بعده)
   // يستقبل الفهرس الحقيقي، فالبحث لا يستطيع أن يحذف السؤال الخطأ.
   const visibleQuestions = useMemo(() => {
-    const all = (Array.isArray(formData.questions) ? formData.questions : []).map((question, originalIndex) => ({
+    const all = (
+      Array.isArray(formData.questions) ? formData.questions : []
+    ).map((question, originalIndex) => ({
       question,
       originalIndex,
     }));
@@ -269,7 +275,9 @@ const ExamEditor = () => {
    */
   const handleRenameInSummary = useCallback((oldName, newName) => {
     setFormData((prev) => {
-      const updatedSummary = (Array.isArray(prev.summary) ? prev.summary : []).map((lecture) => {
+      const updatedSummary = (
+        Array.isArray(prev.summary) ? prev.summary : []
+      ).map((lecture) => {
         const title = getSummaryTitle(lecture);
         if (title !== oldName) return lecture;
 
@@ -294,7 +302,9 @@ const ExamEditor = () => {
    */
   const handleRenameInQuestions = useCallback((oldName, newName) => {
     setFormData((prev) => {
-      const updatedQuestions = (Array.isArray(prev.questions) ? prev.questions : []).map((q) =>
+      const updatedQuestions = (
+        Array.isArray(prev.questions) ? prev.questions : []
+      ).map((q) =>
         q.lecture?.trim() === oldName ? { ...q, lecture: newName } : q,
       );
       return { ...prev, questions: updatedQuestions };
@@ -370,13 +380,17 @@ const ExamEditor = () => {
   };
 
   const removeQuestion = (index) => {
-    if ((Array.isArray(formData.questions) ? formData.questions : []).length <= 1) {
+    if (
+      (Array.isArray(formData.questions) ? formData.questions : []).length <= 1
+    ) {
       alert("يجب أن يحتوي المادة على سؤال واحد على الأقل");
       return;
     }
     setFormData((prev) => ({
       ...prev,
-      questions: (Array.isArray(prev.questions) ? prev.questions : []).filter((_, i) => i !== index),
+      questions: (Array.isArray(prev.questions) ? prev.questions : []).filter(
+        (_, i) => i !== index,
+      ),
     }));
     setIsSaved(false);
   };
@@ -392,7 +406,11 @@ const ExamEditor = () => {
   };
 
   const moveQuestionDown = (index) => {
-    if (index === (Array.isArray(formData.questions) ? formData.questions : []).length - 1) return;
+    if (
+      index ===
+      (Array.isArray(formData.questions) ? formData.questions : []).length - 1
+    )
+      return;
     setFormData((prev) => {
       const q = [...prev.questions];
       [q[index], q[index + 1]] = [q[index + 1], q[index]];
@@ -406,9 +424,12 @@ const ExamEditor = () => {
     if (
       isNaN(targetIndex) ||
       targetIndex < 0 ||
-      targetIndex >= (Array.isArray(formData.questions) ? formData.questions : []).length
+      targetIndex >=
+        (Array.isArray(formData.questions) ? formData.questions : []).length
     ) {
-      alert(`الرجاء إدخال رقم صحيح بين 1 و ${(Array.isArray(formData.questions) ? formData.questions : []).length}`);
+      alert(
+        `الرجاء إدخال رقم صحيح بين 1 و ${(Array.isArray(formData.questions) ? formData.questions : []).length}`,
+      );
       return;
     }
     if (currentIndex === targetIndex) return;
@@ -548,8 +569,12 @@ const ExamEditor = () => {
       alert("يرجى ملء جميع الحقول المطلوبة");
       return;
     }
-    const invalid = (Array.isArray(formData.questions) ? formData.questions : []).filter(
-      (q) => !q.question || (Array.isArray(q.options) ? q.options : []).some((o) => !o),
+    const invalid = (
+      Array.isArray(formData.questions) ? formData.questions : []
+    ).filter(
+      (q) =>
+        !q.question ||
+        (Array.isArray(q.options) ? q.options : []).some((o) => !o),
     );
     if (invalid.length > 0) {
       alert("يرجى ملء جميع الأسئلة والخيارات");
@@ -685,13 +710,21 @@ const ExamEditor = () => {
             </button>
             <button
               onClick={() => moveQuestionDown(qIndex)}
-              disabled={qIndex === (Array.isArray(formData.questions) ? formData.questions : []).length - 1}
+              disabled={
+                qIndex ===
+                (Array.isArray(formData.questions) ? formData.questions : [])
+                  .length -
+                  1
+              }
               className="p-1 disabled:opacity-50"
             >
               <ArrowDown
                 size={24}
                 color={
-                  qIndex === (Array.isArray(formData.questions) ? formData.questions : []).length - 1
+                  qIndex ===
+                  (Array.isArray(formData.questions) ? formData.questions : [])
+                    .length -
+                    1
                     ? "#d1d5db"
                     : "#3b82f6"
                 }
@@ -742,24 +775,26 @@ const ExamEditor = () => {
         </div>
 
         <div className="gap-2 mb-4 space-y-2">
-          {(Array.isArray(question.options) ? question.options : []).map((option, optIndex) => (
-            <div key={optIndex} className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
-                <span className="text-sm font-bold text-gray-600">
-                  {optIndex + 1}
-                </span>
+          {(Array.isArray(question.options) ? question.options : []).map(
+            (option, optIndex) => (
+              <div key={optIndex} className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold text-gray-600">
+                    {optIndex + 1}
+                  </span>
+                </div>
+                <textarea
+                  value={option}
+                  onChange={(e) =>
+                    handleOptionChange(qIndex, optIndex, e.target.value)
+                  }
+                  className="flex-1 border border-gray-300 bg-gray-50 p-2 rounded-lg text-base"
+                  placeholder={`الخيار ${optIndex + 1}`}
+                  rows={2}
+                />
               </div>
-              <textarea
-                value={option}
-                onChange={(e) =>
-                  handleOptionChange(qIndex, optIndex, e.target.value)
-                }
-                className="flex-1 border border-gray-300 bg-gray-50 p-2 rounded-lg text-base"
-                placeholder={`الخيار ${optIndex + 1}`}
-                rows={2}
-              />
-            </div>
-          ))}
+            ),
+          )}
         </div>
 
         <div className="mb-3">
@@ -841,12 +876,6 @@ const ExamEditor = () => {
                 {isSaved ? "محفوظ" : "جاري الحفظ..."}
               </span>
             </div>
-            <button
-              onClick={exportExamAsJSON}
-              className="bg-brand px-3 py-2 rounded-lg flex items-center gap-1.5 hover:opacity-90"
-            >
-              <Download size={16} color="#ffffff" />
-            </button>
           </div>
         </div>
 
@@ -888,8 +917,8 @@ const ExamEditor = () => {
                 الأسئلة والملخص صارا داخل كل محاضرة
               </p>
               <p className="text-xs text-gray-500 mt-0.5">
-                كل محتوى المحاضرة في مكان واحد: نصّ وملخص وأسئلة وبطاقات
-                وتحريري — والمطابقة بمعرّف المحاضرة لا بالاسم.
+                كل محتوى المحاضرة في مكان واحد: نصّ وملخص وأسئلة وبطاقات وتحريري
+                — والمطابقة بمعرّف المحاضرة لا بالاسم.
               </p>
             </div>
             {isEditing && (
@@ -903,8 +932,6 @@ const ExamEditor = () => {
             )}
           </div>
         </div>
-
-
       </div>
 
       {/* ─── Sort Modal ─────────────────────────────────────────────────────── */}
