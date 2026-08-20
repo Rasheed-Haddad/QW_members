@@ -54,13 +54,21 @@ export const pageOwners = (ranges, pageCount) => {
 
 /** يشقّ النطاق الذي تقع فيه الصفحة، فتصير هذه الصفحة أول محاضرة جديدة.
  *  الشقّ عند بداية نطاق أو خارج أي نطاق لا يفعل شيئاً. */
-export const splitAt = (ranges, page) => {
+export const splitAt = (ranges, page, name = "", dropped = false) => {
   const list = sorted(ranges);
   const i = list.findIndex((r) => page > r.start && page <= r.end);
   if (i === -1) return ranges;
   const r = list[i];
   const left = { ...r, end: page - 1 };
-  const right = { id: newRangeId(), start: page, end: r.end, name: "" };
+  // الاسم يُؤخذ ساعةَ الشقّ: تركه فارغاً يرغم المستخدم على النزول إلى آخر
+  // القائمة وتسميته ثم العودة إلى أعلى الشبكة — مرّةً لكل قسم.
+  const right = {
+    id: newRangeId(),
+    start: page,
+    end: r.end,
+    name: String(name || ""),
+    dropped: Boolean(dropped),
+  };
   return [...list.slice(0, i), left, right, ...list.slice(i + 1)];
 };
 
@@ -152,12 +160,17 @@ export const sanitizeName = (name) =>
 export const duplicateNames = (ranges) => {
   const seen = new Map();
   ranges.forEach((r) => {
+    if (r.dropped) return; // المهمَل لا يُنتج ملفاً فلا يزاحم على الاسم
     const k = sanitizeName(r.name).trim().toLowerCase();
     if (!k) return;
     seen.set(k, (seen.get(k) || 0) + 1);
   });
   return [...seen.entries()].filter(([, n]) => n > 1).map(([k]) => k);
 };
+
+/** النطاقات المنتِجة وحدها — المهمَل يبقى في القائمة ليُرى ويُراجَع،
+ *  لكنه لا يُقصّ ولا يذهب إلى المسح الضوئي. */
+export const producing = (ranges) => sorted(ranges).filter((r) => !r.dropped);
 
 /** تقرير التحقق الكامل.
  *  blocking = يمنع المتابعة (يُنتج ملفاً خاطئاً حتماً)
@@ -168,6 +181,8 @@ export const validate = (ranges, pageCount) => {
 
   if (list.length === 0) {
     problems.push({ level: "blocking", code: "empty", text: "لا نطاقات — أضف نطاقاً واحداً على الأقل" });
+  } else if (list.every((r) => r.dropped)) {
+    problems.push({ level: "blocking", code: "all_dropped", text: "كل الأقسام مهمَلة — لن يخرج شيء إلى المسح الضوئي" });
   }
 
   list.forEach((r, i) => {
@@ -179,7 +194,8 @@ export const validate = (ranges, pageCount) => {
     } else if (r.end > pageCount || r.start > pageCount) {
       problems.push({ level: "blocking", code: "out_of_range", id: r.id, text: `${label}: خارج حدود المستند (${pageCount} صفحة)` });
     }
-    if (!sanitizeName(r.name).trim()) {
+    // المهمَل لا يخرج ملفاً، فاسمه لا يلزم ولا يمنع المتابعة
+    if (!r.dropped && !sanitizeName(r.name).trim()) {
       problems.push({ level: "blocking", code: "no_name", id: r.id, text: `النطاق ${i + 1} (صفحات ${r.start}–${r.end}) بلا اسم — الاسم يصير اسم المحاضرة` });
     }
   });
@@ -220,9 +236,16 @@ export const validate = (ranges, pageCount) => {
 /** تسمية جماعية: بادئة + ترقيم متسلسل يحترم عدد الخانات */
 export const applyBulkNames = (ranges, prefix) => {
   const list = sorted(ranges);
-  const width = String(list.length).length;
-  return list.map((r, i) => ({
-    ...r,
-    name: `${prefix}${String(i + 1).padStart(width, "0")}`,
-  }));
+  // الترقيم يجري على المنتِجة وحدها: لو عدّ المهمَل لانقطع تسلسل المحاضرات
+  const width = String(list.filter((r) => !r.dropped).length).length;
+  let n = 0;
+  return list.map((r) => {
+    if (r.dropped) return r;
+    n += 1;
+    return { ...r, name: `${prefix}${String(n).padStart(width, "0")}` };
+  });
 };
+
+/** قلبُ حالة الإهمال */
+export const toggleDropped = (ranges, id) =>
+  ranges.map((r) => (r.id === id ? { ...r, dropped: !r.dropped } : r));

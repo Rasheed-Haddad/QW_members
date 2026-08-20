@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Trash2, Wand2, Crosshair, Tags } from "lucide-react";
+import { Trash2, Wand2, Crosshair, Tags, EyeOff, Eye } from "lucide-react";
 import { colorFor, sorted, sanitizeName } from "../lib/ranges";
 
 // ─── قائمة المحاضرات ──────────────────────────────────────────────────────────
@@ -35,6 +35,7 @@ export default function RangeList({
   problemsById,
   onUpdate,
   onRemove,
+  onToggleDropped,
   onJump,
   onSuggestName,
   onBulkName,
@@ -45,7 +46,7 @@ export default function RangeList({
   const [showBulk, setShowBulk] = useState(false);
 
   return (
-    <div className="flex flex-col gap-3 h-full">
+    <div className="flex flex-col gap-3 h-full min-h-0 flex-1">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-gray-800">
           المحاضرات
@@ -86,7 +87,10 @@ export default function RangeList({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto flex flex-col gap-2 pl-1">
+      {/* min-h-0 شرطٌ لا زينة: عنصر flex ارتفاعه الأدنى auto فلا ينكمش دون
+          مقاس محتواه، فلا يعمل overflow-y-auto أبداً وتتمدّد القائمة خارج
+          صندوقها. وهذا ما أخفى النطاقات بعد الرابع حين قُصّ الصندوق. */}
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2 pl-1">
         {list.length === 0 && (
           <p className="text-sm text-gray-400 text-center py-8">
             لا نطاقات — انقر صفحةً في الشبكة لبدء التقسيم
@@ -100,8 +104,12 @@ export default function RangeList({
           return (
             <div
               key={r.id}
-              className={`p-3 rounded-xl border bg-white ${
-                bad.length ? "border-red-200" : "border-gray-200"
+              className={`p-3 rounded-xl border ${
+                r.dropped
+                  ? "border-dashed border-amber-300 bg-amber-50/40 opacity-75"
+                  : bad.length
+                    ? "border-red-200 bg-white"
+                    : "border-gray-200 bg-white"
               }`}
             >
               <div className="flex items-center gap-2 mb-2">
@@ -129,6 +137,21 @@ export default function RangeList({
 
                 <div className="mr-auto flex items-center gap-0.5">
                   <button
+                    onClick={() => onToggleDropped?.(r.id)}
+                    title={
+                      r.dropped
+                        ? "مهمَل — لا يذهب إلى المسح الضوئي. انقر لإعادته"
+                        : "أهمِله — يبقى معروضاً ولا يُقصّ"
+                    }
+                    className={`p-1.5 rounded-md ${
+                      r.dropped
+                        ? "text-amber-600 bg-amber-100"
+                        : "text-gray-400 hover:bg-gray-100"
+                    }`}
+                  >
+                    {r.dropped ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                  <button
                     onClick={() => onJump(r.start)}
                     title="اذهب إلى صفحتها"
                     className="p-1.5 rounded-md text-gray-400 hover:bg-gray-100"
@@ -145,13 +168,21 @@ export default function RangeList({
                 </div>
               </div>
 
+              {r.dropped && (
+                <p className="text-[11px] font-bold text-amber-700 mb-1.5">
+                  مهمَل — لن يُقصّ ولن يذهب إلى المسح الضوئي
+                </p>
+              )}
+
               <div className="flex gap-1.5">
                 <input
                   value={r.name}
+                  disabled={r.dropped}
                   onChange={(e) => onUpdate(r.id, "name", e.target.value)}
                   placeholder="اسم المحاضرة"
                   dir="rtl"
-                  className={`flex-1 px-2.5 py-2 rounded-xl border text-sm outline-none focus:border-brand ${
+                  className={`flex-1 px-2.5 py-2 rounded-xl border text-sm outline-none focus:border-brand disabled:bg-gray-100 disabled:text-gray-400 ${
+                    !r.dropped &&
                     bad.some((p) => p.code === "no_name" || p.code === "dup_name")
                       ? "border-red-300 bg-red-50/40"
                       : "border-gray-200"
@@ -159,7 +190,7 @@ export default function RangeList({
                 />
                 <button
                   onClick={() => onSuggestName(r)}
-                  disabled={suggesting === r.id}
+                  disabled={suggesting === r.id || r.dropped}
                   title="اقترح الاسم من نصّ أول صفحة"
                   className="px-2.5 rounded-xl border border-gray-200 text-gray-500 hover:text-brand hover:border-brand disabled:opacity-40"
                 >

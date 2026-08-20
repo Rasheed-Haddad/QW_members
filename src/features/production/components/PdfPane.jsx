@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FileText, Loader2, ZoomIn, ZoomOut } from "lucide-react";
+import { FileText, Loader2, ZoomIn, ZoomOut, MonitorPlay, Layers } from "lucide-react";
 import { openForView, renderPageToCanvas } from "../lib/pdfEngine";
 
 // ─── لوح المقرَّر الأصلي ──────────────────────────────────────────────────────
@@ -21,6 +21,28 @@ export default function PdfPane({ bytes, title = "المقرَّر الأصلي"
   const [width, setWidth] = useState(700);
   const [visible, setVisible] = useState(3); // كم صفحة رُسمت حتى الآن
   const scrollRef = useRef(null);
+
+  // ── العارض الأصلي ──
+  // رسم pdf.js يعتمد على برنامج الخطّ المُضمَّن في الملف؛ فإن كان الترميز
+  // تالفاً أو الخطّ غير مُضمَّن خرجت الحروف مقطوشة، ولا يُصلحه إعداد.
+  // عارض المتصفّح (Chrome/Electron) محرِّكٌ آخر أصلب في هذه الحالات، فنتيح
+  // التحويل إليه بضغطة بدل أن يبقى المستخدم أمام نصٍّ لا يُقرأ.
+  const [native, setNative] = useState(false);
+  const [blobUrl, setBlobUrl] = useState("");
+
+  useEffect(() => {
+    if (!bytes?.length) {
+      setBlobUrl("");
+      return undefined;
+    }
+    // نسخة مستقلة: pdf.js قد يكون استولى على المخزن الأصلي
+    const copy = bytes.slice(0);
+    const url = URL.createObjectURL(
+      new Blob([copy], { type: "application/pdf" }),
+    );
+    setBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [bytes]);
 
   useEffect(() => {
     let dead = false;
@@ -81,20 +103,56 @@ export default function PdfPane({ bytes, title = "المقرَّر الأصلي"
           </span>
         )}
         <button
-          onClick={() => setWidth((w) => Math.max(360, w - 120))}
-          className="p-1 rounded text-gray-500 hover:bg-gray-100"
-          title="تصغير"
+          onClick={() => setNative((v) => !v)}
+          title={
+            native
+              ? "عد إلى شبكة الصفحات (تكبير وتحكّم أدقّ)"
+              : "افتحه بعارض المتصفّح — أصلب مع الملفات ذات الترميز التالف"
+          }
+          className={`text-[11px] font-semibold rounded-lg px-2 py-1 flex items-center gap-1 border ${
+            native
+              ? "bg-brand text-white border-transparent"
+              : "bg-brand/10 text-brand border-brand/20"
+          }`}
         >
-          <ZoomOut size={14} />
+          {native ? <Layers size={12} /> : <MonitorPlay size={12} />}
+          {native ? "شبكة" : "عارض"}
         </button>
-        <button
-          onClick={() => setWidth((w) => Math.min(1600, w + 120))}
-          className="p-1 rounded text-gray-500 hover:bg-gray-100"
-          title="تكبير"
-        >
-          <ZoomIn size={14} />
-        </button>
+        {!native && (
+          <>
+            <button
+              onClick={() => setWidth((w) => Math.max(360, w - 120))}
+              className="p-1 rounded text-gray-500 hover:bg-gray-100"
+              title="تصغير"
+            >
+              <ZoomOut size={14} />
+            </button>
+            <button
+              onClick={() => setWidth((w) => Math.min(1600, w + 120))}
+              className="p-1 rounded text-gray-500 hover:bg-gray-100"
+              title="تكبير"
+            >
+              <ZoomIn size={14} />
+            </button>
+          </>
+        )}
       </div>
+
+      {native ? (
+        blobUrl ? (
+          // العارض الأصلي يتولّى تمريره وتكبيره وبحثه بنفسه
+          <iframe
+            src={blobUrl}
+            title={title}
+            className="flex-1 w-full border-0 bg-white"
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+            <Loader2 size={15} className="animate-spin ml-2" /> جارٍ التجهيز…
+          </div>
+        )
+      ) : (
+      <>
 
       <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-auto p-3">
         {error && (
@@ -123,6 +181,8 @@ export default function PdfPane({ bytes, title = "المقرَّر الأصلي"
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import {
   SpellCheck2,
@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Check,
   Undo2,
+  Brain,
 } from "lucide-react";
 import { usePipeline } from "../pipelineStore";
 import OriginalPane from "../components/OriginalPane";
@@ -36,6 +37,11 @@ import {
 // لا شيء يُكتب على النص قبل ضغطك «طبّق». التدقيق التلقائي بلا مراجعة كان
 // يقلب كلمات سليمة إلى أخرى، ولا يُكتشف ذلك إلا عند الطالب.
 const WAIT_BETWEEN_CHUNKS = 6500; // مثل الأصل: 6.5 ثانية بين الطلبات
+// مهلة الطلب الواحد: بلا مهلة ينتظر axios إلى الأبد إن سكت الخادم، فيبقى
+// «جارٍ التدقيق» معلّقاً بلا خطأ ولا نتيجة.
+const CHUNK_TIMEOUT_MS = 180000;
+// سقف انتظار الحصّة: retryAfter قد يعود بآلاف الثواني وانتظارها يبدو تعليقاً
+const MAX_QUOTA_WAIT_S = 90;
 
 export default function Step3Spell() {
   const { state, dispatch } = usePipeline();
@@ -98,23 +104,39 @@ export default function Step3Spell() {
       patch(lec.id, { progress: { done: i, total: chunks.length } });
       try {
         // eslint-disable-next-line no-await-in-loop
-        const r = await axios.post(`${API_BASE_URL}/production/spellcheck`, {
-          PASSWORD,
-          text: chunks[i].text,
-          model,
-          learned: learnedForPrompt(),
-        });
+        const r = await axios.post(
+          `${API_BASE_URL}/production/spellcheck`,
+          {
+            PASSWORD,
+            text: chunks[i].text,
+            model,
+            learned: learnedForPrompt(),
+          },
+          { timeout: CHUNK_TIMEOUT_MS },
+        );
         raw.push(...(r.data?.corrections || []));
       } catch (e) {
-        const wait = e?.response?.data?.retryAfter;
-        if (wait && quotaRetries < MAX_QUOTA_RETRIES) {
+        if (e?.code === "ECONNABORTED") {
+          patch(lec.id, {
+            status: "error",
+            progress: null,
+            error: `الدفعة ${i + 1} تجاوزت ${CHUNK_TIMEOUT_MS / 1000} ثانية بلا ردّ — جرّب نموذجاً أسرع أو صغّر حجم الدفعة من الإعدادات.`,
+          });
+          return false;
+        }
+        const wait = Number(e?.response?.data?.retryAfter) || 0;
+        if (wait && wait <= MAX_QUOTA_WAIT_S && quotaRetries < MAX_QUOTA_RETRIES) {
           // تجاوز الحصة: ننتظر المهلة التي طلبها الخادم ونعيد الدفعة نفسها
           quotaRetries += 1;
-          patch(lec.id, {
-            progress: { done: i, total: chunks.length, waiting: wait },
-          });
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise((r2) => setTimeout(r2, wait * 1000));
+          // عدٌّ تنازليّ مرئي: الانتظار الصامت لا يُفرَّق عن التعليق
+          for (let s = wait; s > 0; s--) {
+            if (stopRef.current) return false;
+            patch(lec.id, {
+              progress: { done: i, total: chunks.length, waiting: s },
+            });
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise((r2) => setTimeout(r2, 1000));
+          }
           i -= 1;
           // eslint-disable-next-line no-continue
           continue;
@@ -140,8 +162,20 @@ export default function Step3Spell() {
       status: "done",
       progress: null,
       // كل مقبول يبدأ مُحدَّداً، ونصّه قابل للتعديل اليدوي
-      accepted: accepted.map((c, i) => ({ ...c, key: `a${i}`, on: true })),
-      rejected: rejected.map((c, i) => ({ ...c, key: `r${i}`, on: false })),
+      // on: يُطبَّق افتراضياً · learn: لا يدخل السجلّ إلا باختيارك
+      accepted: accepted.map((c, i) => ({
+        ...c,
+        key: `a${i}`,
+        on: true,
+        learn: false,
+      })),
+      // لا رفضَ آلياً بعد اليوم — تبقى فارغةً حفاظاً على شكل التقرير
+      rejected: rejected.map((c, i) => ({
+        ...c,
+        key: `r${i}`,
+        on: false,
+        learn: false,
+      })),
     });
     return true;
   };
@@ -166,7 +200,8 @@ export default function Step3Spell() {
       (c) => c.on && String(c.after || "").trim() && c.after !== c.before,
     );
     // ما قبِلتَه فعلاً — بصيغتك النهائية بعد تعديلك لا بصيغة النموذج
-    recordAccepted(chosen);
+    // السجلّ يأخذ ما أشّرتَ عليه وحده — لا كلّ ما طُبِّق
+    recordAccepted(chosen.filter((c) => c.learn));
     setLearnedCount(getLearned().length);
     const r = applyCorrections(markdown[id], chosen);
     dispatch({ type: "markdown", markdown: { [id]: r.text } });
@@ -178,7 +213,8 @@ export default function Step3Spell() {
     setReviewing(null);
   };
 
-  const setField = (id, key, field, value) => {
+  // مرجعٌ ثابت: لو تغيّر مع كل رسمة لبطل memo على الصفوف وعاد البطء كما كان
+  const setField = useCallback((id, key, field, value) => {
     setReports((prev) => {
       const rep = prev[id];
       if (!rep) return prev;
@@ -186,10 +222,14 @@ export default function Step3Spell() {
         (arr || []).map((c) => (c.key === key ? { ...c, [field]: value } : c));
       return {
         ...prev,
-        [id]: { ...rep, accepted: upd(rep.accepted), rejected: upd(rep.rejected) },
+        [id]: {
+          ...rep,
+          accepted: upd(rep.accepted),
+          rejected: upd(rep.rejected),
+        },
       };
     });
-  };
+  }, []);
 
   const counts = useMemo(() => {
     let done = 0;
@@ -214,6 +254,11 @@ export default function Step3Spell() {
   }
 
   const rep = reviewing ? reports[reviewing] : null;
+  // تُشتقّ من reviewing وحدها: تمرير دالةٍ جديدة كل رسمة يُبطل memo الصفوف
+  const boundField = useCallback(
+    (key, field, v) => setField(reviewing, key, field, v),
+    [reviewing, setField],
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -321,21 +366,19 @@ export default function Step3Spell() {
               }`}
             >
               <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-xs font-bold text-gray-400 w-5">{i + 1}</span>
+                <span className="text-xs font-bold text-gray-400 w-5">
+                  {i + 1}
+                </span>
                 <span className="text-sm font-semibold text-gray-800 truncate max-w-[220px]">
                   {l.name}
                 </span>
                 <span className="text-xs text-gray-400">
-                  {markdown[l.id]?.split("\n").length.toLocaleString("ar-EG")} سطر
+                  {markdown[l.id]?.split("\n").length.toLocaleString("ar-EG")}{" "}
+                  سطر
                 </span>
 
                 {r.status === "done" && (
-                  <span className="text-xs text-gray-600">
-                    {nAcc} مقترح
-                    {nRej > 0 && (
-                      <span className="text-gray-400"> · {nRej} مرفوض آلياً</span>
-                    )}
-                  </span>
+                  <span className="text-xs text-gray-600">{nAcc} مقترح</span>
                 )}
                 {r.status === "applied" && (
                   <span className="text-xs text-green-700 flex items-center gap-1.5">
@@ -352,14 +395,15 @@ export default function Step3Spell() {
                 )}
 
                 <div className="mr-auto flex items-center gap-2">
-                  {(r.status === "done" || r.status === "applied") && nAcc + nRej > 0 && (
-                    <button
-                      onClick={() => setReviewing(l.id)}
-                      className="text-xs font-medium text-brand bg-brand/10 rounded-lg px-3 py-1.5"
-                    >
-                      عرض نتيجة التدقيق
-                    </button>
-                  )}
+                  {(r.status === "done" || r.status === "applied") &&
+                    nAcc + nRej > 0 && (
+                      <button
+                        onClick={() => setReviewing(l.id)}
+                        className="text-xs font-medium text-brand bg-brand/10 rounded-lg px-3 py-1.5"
+                      >
+                        عرض نتيجة التدقيق
+                      </button>
+                    )}
                   <button
                     onClick={() => {
                       setModelLocked(true);
@@ -420,7 +464,7 @@ export default function Step3Spell() {
           text={markdown[reviewing]}
           originalText={original?.[reviewing]}
           report={rep}
-          onField={(key, field, v) => setField(reviewing, key, field, v)}
+          onField={boundField}
           onApply={() => applyFor(reviewing)}
           onClose={() => setReviewing(null)}
         />
@@ -430,14 +474,26 @@ export default function Step3Spell() {
 }
 
 // ─── نافذة المراجعة ───────────────────────────────────────────────────────────
-// كل كلمة: «سابقاً» و«الآن» قابلة للتعديل. المرفوض آلياً معروضٌ أيضاً بسببه —
-// القاعدة قد تخطئ في حالةٍ بعينها، والقرار الأخير لك.
+// كل كلمة: «سابقاً» و«الآن» قابلة للتعديل، والقرار كلّه لك.
+// لا رفضَ آلياً: الحرّاس تُعلِّق بتنبيهٍ على السطر ولا تُقصي اقتراحاً إلى
+// قائمةٍ ثانية — كانت تُراجَع القائمتان معاً فلا تُوفّر شيئاً.
 
-const Row = ({ c, text, onField, onFocusWord, muted }) => {
+// **العزل**: كل حرفٍ يُكتب في «الآن» كان يرفع الحالة إلى الأب فتُرسَم
+// الصفوف كلّها من جديد. النصّ الآن مسوّدةٌ محلّية لا تُصعَّد إلا عند مغادرة
+// الحقل، والصفّ ملفوف بـmemo فلا يُعاد رسمه إلا إذا تغيّر تصحيحه هو.
+const Row = memo(function Row({ c, text, onField, onFocusWord, muted }) {
   const line = String(text || "").split("\n")[Number(c.line)] || "";
   const idx = line.indexOf(c.before);
   const head = idx >= 0 ? line.slice(0, idx) : "";
   const tail = idx >= 0 ? line.slice(idx + c.before.length) : "";
+
+  // مسوّدة الحقل: تعيش هنا وحدها أثناء الكتابة
+  const [draft, setDraft] = useState(c.after);
+  // تُزامَن حين يتغيّر التصحيح من الخارج (إعادة تدقيق) لا مع كل ضغطة
+  useEffect(() => setDraft(c.after), [c.key, c.after]);
+  const commit = () => {
+    if (draft !== c.after) onField(c.key, "after", draft);
+  };
 
   return (
     <div
@@ -445,37 +501,58 @@ const Row = ({ c, text, onField, onFocusWord, muted }) => {
         muted ? "bg-gray-50/60" : ""
       }`}
     >
-      <button
-        onClick={() => onField(c.key, "on", !c.on)}
-        title={c.on ? "لن يُطبَّق" : "سيُطبَّق"}
-        className={`w-6 h-6 mt-1 rounded-md flex items-center justify-center shrink-0 ${
-          c.on
-            ? "bg-green-500 text-white"
-            : "bg-gray-200 text-gray-400 hover:bg-gray-300"
-        }`}
-      >
-        {c.on && <Check size={14} />}
-      </button>
+      {/* قراران مستقلّان: أيُطبَّق على النصّ؟ وأيدخل سجلّ ما يتعلّمه النموذج؟ */}
+      <div className="flex flex-col items-center gap-1.5 shrink-0">
+        <button
+          onClick={() => onField(c.key, "on", !c.on)}
+          title={c.on ? "سيُطبَّق على النصّ" : "لن يُطبَّق"}
+          className={`w-6 h-6 mt-1 rounded-md flex items-center justify-center ${
+            c.on
+              ? "bg-green-500 text-white"
+              : "bg-gray-200 text-gray-400 hover:bg-gray-300"
+          }`}
+        >
+          {c.on && <Check size={14} />}
+        </button>
+        {/* يبدأ معطَّلاً عمداً: أكثر التصحيحات عارضةٌ لا قاعدة، وإدخالها
+            كلّها في السجلّ يُغرقه بما لا يتكرّر ثمّ يُقترح في غير موضعه. */}
+        <button
+          onClick={() => onField(c.key, "learn", !c.learn)}
+          title={
+            c.learn
+              ? "سيدخل سجلّ التصحيحات المتعلَّمة"
+              : "لن يدخل السجلّ — فعّله إن كان تصحيحاً متكرّراً يستحقّ التعلّم"
+          }
+          className={`w-6 h-6 rounded-md flex items-center justify-center border ${
+            c.learn
+              ? "bg-brand text-white border-transparent"
+              : "bg-white text-gray-300 border-gray-200 hover:border-brand/40"
+          }`}
+        >
+          <Brain size={13} />
+        </button>
+      </div>
 
       <div className="min-w-0" onMouseEnter={() => onFocusWord?.(c.before)}>
         <button
           onClick={() => onFocusWord?.(c.before)}
           title="أبرزها في الأصل"
-          className="block text-sm font-semibold text-red-700 line-through text-right hover:text-red-900"
+          className="block text-base font-bold text-red-700 text-right hover:text-red-900"
         >
           {c.before}
         </button>
         {/* السطر كاملاً بلا قصّ: الحكم على تصحيحٍ إملائي يحتاج الجملة
             التي وردت فيها الكلمة، لا أوّل كلماتها. */}
         <span
-          className="block text-xs text-gray-600 leading-7 mt-1 font-arabic"
+          className="block text-[15px] text-gray-700 leading-8 mt-1 font-arabic"
           dir="rtl"
         >
-          <span className="text-gray-400">سطر {c.line}: </span>
           {idx >= 0 ? (
             <>
               {head}
-              <mark className="bg-amber-200 rounded px-0.5">{c.before}</mark>
+              <mark className="bg-amber-200 rounded px-1 font-bold">
+                {c.before}
+              </mark>
               {tail}
             </>
           ) : (
@@ -484,24 +561,40 @@ const Row = ({ c, text, onField, onFocusWord, muted }) => {
             </span>
           )}
         </span>
-        {c.reason && (
-          <span className="block text-[11px] text-gray-500 mt-0.5">
-            رُفض آلياً: {c.reason}
+        {/* ملاحظةٌ لا إقصاء: تنبيهٌ من الحرّاس تقرأه وتقرّر، بعد أن أُلغي
+            الرفض الآلي الذي كان يخبّئ الاقتراح في قائمةٍ ثانية. */}
+        {(c.note || c.reason) && (
+          <span className="block text-[12px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-1.5 py-0.5 mt-1">
+            تنبيه: {c.note || c.reason}
           </span>
         )}
       </div>
 
       <span className="text-gray-300 text-sm mt-1.5">←</span>
 
-      <input
-        value={c.after}
-        onChange={(e) => onField(c.key, "after", e.target.value)}
+      {/* textarea لا input: النصّ المصحَّح قد يكون جملةً كاملة، والحقل
+          السطريّ كان يقصّ ما لا يُرى فيُقبل تصحيحٌ لم يُقرأ. يتمدّد بمحتواه. */}
+      <textarea
+        aria-multiline
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onInput={(e) => {
+          e.currentTarget.style.height = "auto";
+          e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
+        }}
+        ref={(el) => {
+          if (!el) return;
+          el.style.height = "auto";
+          el.style.height = `${el.scrollHeight}px`;
+        }}
+        rows={1}
         dir="rtl"
-        className="w-full px-2.5 py-1.5 mt-0.5 rounded-lg border border-gray-200 text-sm font-semibold text-green-800 bg-green-50/40 outline-none focus:border-brand"
+        className="w-full px-2.5 py-2 mt-0.5 rounded-lg border border-gray-200 text-[15px] font-semibold text-green-800 bg-green-50/40 outline-none focus:border-brand resize-y leading-7 font-arabic overflow-hidden"
       />
     </div>
   );
-};
+});
 
 const ReviewModal = ({
   name,
@@ -512,7 +605,6 @@ const ReviewModal = ({
   onApply,
   onClose,
 }) => {
-  const [showRejected, setShowRejected] = useState(false);
   const [showOriginal, setShowOriginal] = useState(true);
   // الكلمة التي تنظر إليها الآن — تُبرَز في الأصل تلقائياً
   const [focusWord, setFocusWord] = useState("");
@@ -534,10 +626,11 @@ const ReviewModal = ({
       >
         <div className="flex items-center gap-3 p-4 border-b border-gray-100">
           <div className="flex-1 min-w-0">
-            <h3 className="text-base font-bold text-gray-800 truncate">{name}</h3>
+            <h3 className="text-base font-bold text-gray-800 truncate">
+              {name}
+            </h3>
             <p className="text-xs text-gray-400">
-              {accepted.length} مقترح · {rejected.length} مرفوض آلياً · اختير{" "}
-              {chosen}
+              {accepted.length} مقترح · اختير {chosen}
             </p>
           </div>
           <button
@@ -559,64 +652,37 @@ const ReviewModal = ({
         </div>
 
         <div className="flex-1 flex overflow-hidden">
-        <div className={`${showOriginal ? "w-3/5" : "w-full"} overflow-y-auto`}>
-          <div className="grid grid-cols-[auto_1fr_auto_1fr] gap-2.5 px-3 py-2 bg-gray-50 border-b border-gray-200 text-[11px] font-bold text-gray-500 sticky top-0">
-            <span className="w-6" />
-            <span>سابقاً</span>
-            <span />
-            <span>الآن — عدّله كما تشاء</span>
+          <div
+            className={`${showOriginal ? "w-3/5" : "w-full"} overflow-y-auto`}
+          >
+            <div className="grid grid-cols-[auto_1fr_auto_1fr] gap-2.5 px-3 py-2 bg-gray-50 border-b border-gray-200 text-[11px] font-bold text-gray-500 sticky top-0">
+              <span className="w-6" />
+              <span>سابقاً</span>
+              <span />
+              <span>الآن — عدّله كما تشاء</span>
+            </div>
+
+            {accepted.length === 0 && (
+              <p className="text-sm text-gray-500 text-center py-10">
+                لا اقتراحات مقبولة
+              </p>
+            )}
+            {accepted.map((c) => (
+              <Row
+                key={c.key}
+                c={c}
+                text={text}
+                onField={onField}
+                onFocusWord={setFocusWord}
+              />
+            ))}
           </div>
 
-          {accepted.length === 0 && (
-            <p className="text-sm text-gray-500 text-center py-10">
-              لا اقتراحات مقبولة
-            </p>
+          {showOriginal && (
+            <div className="w-2/5 border-r border-gray-200 bg-gray-50">
+              <OriginalPane text={originalText} highlight={focusWord} />
+            </div>
           )}
-          {accepted.map((c) => (
-            <Row
-              key={c.key}
-              c={c}
-              text={text}
-              onField={onField}
-              onFocusWord={setFocusWord}
-            />
-          ))}
-
-          {rejected.length > 0 && (
-            <>
-              <button
-                onClick={() => setShowRejected((v) => !v)}
-                className="w-full flex items-center gap-2 px-3 py-2.5 bg-gray-50 text-xs font-semibold text-gray-600 hover:bg-gray-100 border-y border-gray-200"
-              >
-                <ChevronDown
-                  size={14}
-                  className={showRejected ? "" : "-rotate-90"}
-                />
-                {rejected.length} اقتراحاً رفضته القواعد
-                <span className="font-normal text-gray-400">
-                  — اعرضها إن أردت نقض الرفض
-                </span>
-              </button>
-              {showRejected &&
-                rejected.map((c) => (
-                  <Row
-                    key={c.key}
-                    c={c}
-                    text={text}
-                    onField={onField}
-                    onFocusWord={setFocusWord}
-                    muted
-                  />
-                ))}
-            </>
-          )}
-        </div>
-
-        {showOriginal && (
-          <div className="w-2/5 border-r border-gray-200 bg-gray-50">
-            <OriginalPane text={originalText} highlight={focusWord} />
-          </div>
-        )}
         </div>
 
         <div className="p-4 border-t border-gray-100 flex items-center gap-3">

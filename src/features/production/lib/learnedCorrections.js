@@ -68,6 +68,39 @@ export const recordAccepted = (corrections) => {
   save(list);
 };
 
+/** يحذف زوجاً بعينه. المفتاح before→after لا الفهرس: القائمة تُفرز في
+ *  العرض، والفهرس المعروض لا يطابق فهرس المخزن فيُحذف الخطأ غير المقصود. */
+export const forgetPair = (before, after) => {
+  const k = `${String(before || "").trim()}→${String(after || "").trim()}`;
+  const next = load().filter(
+    (x) => `${String(x.before || "").trim()}→${String(x.after || "").trim()}` !== k,
+  );
+  try {
+    localStorage.setItem(STORE, JSON.stringify(next));
+  } catch {
+    // امتلاء المخزن لا يُفشل الحذف المنطقي
+  }
+  return next;
+};
+
+/** يحذف عدّة أزواج دفعةً واحدة — لتنظيفٍ بعد مراجعةٍ بالجملة */
+export const forgetMany = (pairs) => {
+  const kill = new Set(
+    (pairs || []).map(
+      (p) => `${String(p.before || "").trim()}→${String(p.after || "").trim()}`,
+    ),
+  );
+  const next = load().filter(
+    (x) => !kill.has(`${String(x.before || "").trim()}→${String(x.after || "").trim()}`),
+  );
+  try {
+    localStorage.setItem(STORE, JSON.stringify(next));
+  } catch {
+    // لا شيء
+  }
+  return next;
+};
+
 export const clearLearned = () => {
   try {
     localStorage.removeItem(STORE);

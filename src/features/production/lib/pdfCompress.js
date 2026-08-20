@@ -11,27 +11,32 @@ import { openForView } from "./pdfEngine";
 // لا يضرّنا هنا لأن الوجهة مسحٌ ضوئي (Mistral يقرأ الصور أصلاً)، لكنه
 // يعني ألّا يُستعمل هذا الملف نسخةً نهائية للطالب.
 
+// العيارات مرفوعة عن الأصل المنقول: النصّ العربي يُقرأ بنقاطه وهمزاته
+// وتشكيله، وهي أوّل ما يبتلعه JPEG. المقياس دون 1.5 يجعل الحرف الصغير
+// أقلّ من بضعة بكسلات فتلتحم نقاطه، والجودة دون 0.75 تُحدث حول الحروف
+// تلطّخاً (ringing) يقطع أطرافها. التوفير أقلّ قليلاً — والمقابل أن يبقى
+// المقرَّر مقروءاً للعين ولمحرّك المسح الضوئي معاً.
 export const LEVELS = {
   light: {
     key: "light",
     label: "خفيف — أعلى جودة",
     hint: "يحفظ التفاصيل الدقيقة · توفير أقلّ",
-    scale: 1.5,
-    quality: 0.9,
+    scale: 2.0,
+    quality: 0.92,
   },
   medium: {
     key: "medium",
     label: "متوسط",
     hint: "توازن بين الحجم والوضوح",
-    scale: 1.0,
-    quality: 0.7,
+    scale: 1.7,
+    quality: 0.85,
   },
   strong: {
     key: "strong",
     label: "قوي — أصغر حجماً",
-    hint: "قد تخفت الحروف الصغيرة",
-    scale: 0.8,
-    quality: 0.5,
+    hint: "أصغر ما يبقى معه النصّ العربي مقروءاً",
+    scale: 1.5,
+    quality: 0.75,
   },
 };
 
@@ -49,16 +54,23 @@ export const compressPdf = async (bytes, levelKey = "light", onProgress) => {
       onProgress?.(i - 1, pdf.numPages);
       // eslint-disable-next-line no-await-in-loop
       const page = await pdf.getPage(i);
+      // الصفحة تُرسم بمقياس L.scale وتوضع في المستند بمقاسها الأصلي:
+      // الرسم فوق المقاس (supersampling) هو ما يحفظ حدّة الحرف بعد الترميز.
+      const box = page.getViewport({ scale: 1 });
       const vp = page.getViewport({ scale: L.scale });
       const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.floor(vp.width));
-      canvas.height = Math.max(1, Math.floor(vp.height));
+      canvas.width = Math.max(1, Math.round(vp.width));
+      canvas.height = Math.max(1, Math.round(vp.height));
       // خلفية بيضاء: JPEG بلا شفافية، وبدونها تصير الشفافية سوداء
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", { alpha: false });
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       // eslint-disable-next-line no-await-in-loop
-      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      await page.render({
+        canvasContext: ctx,
+        viewport: vp,
+        background: "#ffffff",
+      }).promise;
       page.cleanup();
 
       // eslint-disable-next-line no-await-in-loop
@@ -73,11 +85,13 @@ export const compressPdf = async (bytes, levelKey = "light", onProgress) => {
       const jpg = new Uint8Array(await blob.arrayBuffer());
       // eslint-disable-next-line no-await-in-loop
       const img = await out.embedJpg(jpg);
-      out.addPage([vp.width, vp.height]).drawImage(img, {
+      // المقاس الأصلي لا مقاس الرسم: الصورة الأكبر تُضغط داخل الصفحة
+      // فتزيد كثافة بكسلاتها، ولا تخرج صفحةٌ عملاقة عند scale>1.
+      out.addPage([box.width, box.height]).drawImage(img, {
         x: 0,
         y: 0,
-        width: vp.width,
-        height: vp.height,
+        width: box.width,
+        height: box.height,
       });
 
       // نفسح للمتصفّح كي يرسم التقدّم — بدونه تتجمّد الواجهة صامتة

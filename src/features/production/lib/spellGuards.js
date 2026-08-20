@@ -142,19 +142,17 @@ export const screenCorrections = (corrections, fullText) => {
       return;
     }
 
+    // ── الرفض الآلي مُزال ──
+    // كان يُقصي اقتراحاتٍ إلى قائمةٍ ثانية مطويّة، فينتهي الأمر إلى مراجعة
+    // القائمتين معاً — كلفةُ فرزٍ بلا عائد. الحكم كلّه للمراجع الآن،
+    // والحرّاس باقيةٌ تُعلِّم لا تُقصي: سببها يُعرض ملاحظةً على السطر.
     const s1 = isSafeCorrection(c.before, c.after);
-    if (!s1.ok) {
-      rejected.push({ ...c, reason: s1.reason });
-      return;
-    }
-    const s2 = isSafeInContext(c.before, counts);
-    if (!s2.ok) {
-      rejected.push({ ...c, reason: s2.reason });
-      return;
-    }
-    accepted.push({ ...c, reason: "" });
+    const s2 = s1.ok ? isSafeInContext(c.before, counts) : { ok: false, reason: "" };
+    const note = !s1.ok ? s1.reason : !s2.ok ? s2.reason : "";
+    accepted.push({ ...c, reason: "", note });
   });
 
+  // rejected يبقى مصفوفةً فارغة: الشكل نفسه لمن يستدعيها، بلا إقصاء
   return { accepted, rejected };
 };
 

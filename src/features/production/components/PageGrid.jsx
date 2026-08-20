@@ -15,8 +15,10 @@ import { colorFor, sorted } from "../lib/ranges";
 // يُقرأ في مصغّرةٍ بعرض 132 بكسل. الثمن ذاكرة: الصفحة الواحدة هنا تسع
 // أضعاف السابقة، فخفّضنا السقف والتزامن بالمقابل.
 const CONCURRENCY_HINT = 2;
-const CANVAS_BUDGET = 44; // ‎44 × ~0.9م.ب ≈ 40م.ب
-const THUMB_W = 460; // دقّة الرسم — والعرض الفعلي من العمود
+const CANVAS_BUDGET = 32; // ‎32 × ~1.4م.ب ≈ 45م.ب
+// دقّة الرسم — والعرض الفعلي من العمود. العنوان العربي في مقرَّرٍ ممسوح
+// ضوئياً لا يُقرأ تحت هذا؛ وما دون ذلك تضيع نقاط الحروف فتبدو مقطوشة.
+const THUMB_W = 700;
 
 export default function PageGrid({
   pdf,
@@ -49,6 +51,7 @@ export default function PageGrid({
             isStart: p === r.start,
             isEnd: p === r.end,
             name: r.name,
+            dropped: Boolean(r.dropped),
             idx: i,
           });
         }
@@ -191,8 +194,13 @@ export default function PageGrid({
                     : "bg-red-50 border-dashed"
                 }`}
                 style={{
-                  // النسبة محفوظة قبل الرسم فلا تقفز الشبكة عند وصول الصفحة
-                  aspectRatio: `1 / ${aspect}`,
+                  // النسبة تحفظ المكان قبل الرسم فلا تقفز الشبكة عند وصول
+                  // الصفحة — لكنها تُفرَض على الصندوق وحده. اللوحة بعد الرسم
+                  // تأخذ نسبة صفحتها الحقيقية: فرضُ نسبةٍ موحّدة عليها كان
+                  // يمطّ الحروف رأسياً في كل صفحة تخالف A4.
+                  ...(rendered.has(page)
+                    ? null
+                    : { aspectRatio: `1 / ${aspect}` }),
                   borderColor: covered ? info.color : "#fca5a5",
                 }}
               >
@@ -201,7 +209,9 @@ export default function PageGrid({
                     if (el) canvasRefs.current.set(page, el);
                     else canvasRefs.current.delete(page);
                   }}
-                  className="block w-full"
+                  className={`block w-full h-auto ${
+                    info?.dropped ? "opacity-40 grayscale" : ""
+                  }`}
                 />
                 {!rendered.has(page) && (
                   <span className="absolute inset-0 flex items-center justify-center bg-gray-100">
@@ -247,11 +257,13 @@ export default function PageGrid({
                 {isStart && (
                   <span
                     className="block text-xs font-bold truncate leading-tight mt-1"
-                    style={{ color: info.color }}
-                    title={info.name || "بلا اسم"}
+                    style={{ color: info.dropped ? "#b45309" : info.color }}
+                    title={info.name || (info.dropped ? "مهمَل" : "بلا اسم")}
                   >
                     <Bookmark size={11} className="inline -mt-0.5 ml-0.5" />
-                    {info.name || "بلا اسم"}
+                    {info.dropped
+                      ? `مهمَل${info.name ? ` — ${info.name}` : ""}`
+                      : info.name || "بلا اسم"}
                   </span>
                 )}
               </div>

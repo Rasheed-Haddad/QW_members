@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Columns2,
   Eye,
@@ -8,9 +8,20 @@ import {
   Search,
   Trash2,
   X,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
-import { listImages, removeImage, renderMarkdown, stats } from "../lib/miniMarkdown";
+import {
+  listImages,
+  removeImage,
+  renderMarkdown,
+  stats,
+} from "../lib/miniMarkdown";
 import PdfPane from "./PdfPane";
+
+// مقاييس النصّ موحّدة بين المحرِّر وطبقة الإبراز خلفه: أي اختلافٍ في الخطّ
+// أو الحشو أو ارتفاع السطر يُزيح اللون عن الكلمة. تُكتب مرّةً وتُستعمل مرّتين.
+const EDITOR_TEXT = "p-4 text-[17px] leading-9 font-arabic";
 
 // ─── ورشة نصّ المقرَّر ────────────────────────────────────────────────────────
 // **مكوّنٌ واحد يستعمله خط الإنتاج وتعديل المادة معاً.**
@@ -51,16 +62,121 @@ export default function CurriculumWorkspace({
   // ── التصفية: مواضع الكلمة في النصّ ──
   // نصّ محاضرةٍ يبلغ عشرات الآلاف من الحروف، والعثور على كلمةٍ فيه بالعين
   // وحدها ليس مراجعةً بل معاناة.
+  // ── البحث: مواضع الكلمة بإزاحتها في النصّ ──
+  // رقم السطر لا يفيد شيئاً — لا يُقفَز إليه ولا يُرى في محرِّرٍ بلا ترقيم.
+  // المطلوب الوصول إلى الكلمة نفسها، فنخزّن إزاحة كل مطابقة ثم نحدّدها في
+  // المحرِّر ونمرّر إليها كما يفعل بحث المتصفّح.
   const hits = useMemo(() => {
     const needle = q.trim();
     if (!needle) return [];
+    const hay = String(text || "");
+    // تطبيعٌ يتجاهل التشكيل وصور الألف والياء والتاء المربوطة: البحث عن
+    // «إجراء» يجب أن يجد «اجراء»، وإلا صار البحث امتحاناً في الإملاء.
+    const normCh = (x) =>
+      x
+        .replace(/[\u064B-\u0652\u0640]/g, "")
+        .replace(/[أإآٱ]/g, "ا")
+        .replace(/ى/g, "ي")
+        .replace(/ة/g, "ه")
+        .toLowerCase();
+    // التطبيع لا يجوز أن يزيح المواضع، فنطبّع حرفاً حرفاً ونحفظ خريطةً
+    // من موضع النصّ المطبَّع إلى موضعه الأصلي.
+    let flat = "";
+    const map = [];
+    for (let i = 0; i < hay.length; i++) {
+      const c = normCh(hay[i]);
+      if (!c) continue; // حركةٌ حُذفت — لا موضع لها
+      for (let k = 0; k < c.length; k++) map.push(i);
+      flat += c;
+    }
+    const nq = normCh(needle);
+    if (!nq) return [];
     const out = [];
-    const lines = String(text || "").split("\n");
-    lines.forEach((line, i) => {
-      if (line.includes(needle)) out.push({ line: i + 1, text: line.trim() });
-    });
-    return out.slice(0, 60);
+    let from = 0;
+    while (out.length < 500) {
+      const at = flat.indexOf(nq, from);
+      if (at === -1) break;
+      const start = map[at];
+      const end = (map[at + nq.length - 1] ?? start) + 1;
+      out.push({ start, end });
+      from = at + nq.length;
+    }
+    return out;
   }, [text, q]);
+
+  // المطابقة الحالية — يُتنقَّل بينها بالسهمين أو بـEnter
+  const [hitIdx, setHitIdx] = useState(0);
+  // أوّل Enter يقف على المطابقة الأولى لا الثانية؛ وما بعده ينتقل.
+  const jumpedRef = useRef(false);
+  useEffect(() => {
+    setHitIdx(0);
+    jumpedRef.current = false;
+  }, [q]);
+  const editorRef = useRef(null);
+  const backdropRef = useRef(null);
+  // مراجع العلامات: يكتبها ردّ الـref بفهرسها ولا تُصفَّر يدوياً.
+  // تصفيرها في جسم المكوّن يفرغها عند إعادة الرسم لتغيّر hitIdx وحده —
+  // فReact لا يعيد استدعاء ردّ الـref حين يتغيّر الصنف فقط. وما زاد عن
+  // عدد المطابقات يصير null عند فكّ العنصر، وgotoHit يتحقّق منه.
+  const markRefs = useRef([]);
+
+  // ── طبقة الإبراز ──
+  // textarea لا يلوّن جزءاً من نصّه، وتحديده الأصلي بلون النظام لا يظهر إلا
+  // وهو مركَّز — فيبقى المستخدم يقرأ كل المعروض بحثاً عن كلمته.
+  // الحلّ المعتاد: طبقةٌ خلفية تحمل النصّ نفسه بمقاييسه نفسها، فيها <mark>
+  // على كل مطابقة، وفوقها textarea شفّاف الخلفية. الطبقتان تُمرَّران معاً.
+  const segments = useMemo(() => {
+    const hay = String(text || "");
+    if (!hits.length) return [{ t: hay, hit: -1 }];
+    const out = [];
+    let at = 0;
+    hits.forEach((h, n) => {
+      if (h.start > at) out.push({ t: hay.slice(at, h.start), hit: -1 });
+      out.push({ t: hay.slice(h.start, h.end), hit: n });
+      at = h.end;
+    });
+    if (at < hay.length) out.push({ t: hay.slice(at), hit: -1 });
+    return out;
+  }, [text, hits]);
+
+
+  // تمرير الطبقة مع المحرِّر — بدونه ينفصل اللون عن الكلمة
+  const syncScroll = useCallback(() => {
+    const el = editorRef.current;
+    const bd = backdropRef.current;
+    if (!el || !bd) return;
+    bd.scrollTop = el.scrollTop;
+    bd.scrollLeft = el.scrollLeft;
+  }, []);
+
+  /** ينتقل إلى المطابقة رقم i ويُبرزها.
+   *  الموضع يُؤخذ من العنصر المرسوم نفسه (offsetTop) لا من حساب الأسطر:
+   *  الـtextarea يلفّ السطر الطويل إلى عدّة أسطر بصرية، فحسابُ «عدد أسطر
+   *  \n × ارتفاع السطر» يقع بعيداً عن الكلمة — وهو سبب القفزات الخاطئة. */
+  const gotoHit = useCallback(
+    (i) => {
+      if (!hits.length) return;
+      const n = ((i % hits.length) + hits.length) % hits.length;
+      setHitIdx(n);
+      // التحرير يجب أن يكون ظاهراً ليُرى الإبراز
+      setMode((m) => (m === "preview" ? "split" : m));
+      // إطاران: الأوّل ليُرسم التبويب إن تغيّر، والثاني لتستقرّ مواضع العناصر
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const el = editorRef.current;
+          const mark = markRefs.current[n];
+          if (!el || !mark) return;
+          const top = mark.offsetTop - el.clientHeight / 2 + mark.offsetHeight / 2;
+          el.scrollTop = Math.max(0, top);
+          syncScroll();
+          // التحديد أيضاً: يجعل الكتابة تستبدل الكلمة مباشرةً
+          const h = hits[n];
+          el.setSelectionRange(h.start, h.end);
+        });
+      });
+    },
+    [hits, syncScroll],
+  );
 
   // حذف صورة بالنقر عليها في المعاينة
   useEffect(() => {
@@ -105,7 +221,9 @@ export default function CurriculumWorkspace({
               : "لا ملفّ أصليّ لهذه المحاضرة في هذه الجلسة"
           }
           className={`text-xs font-medium rounded-lg px-3 py-2 flex items-center gap-1.5 disabled:opacity-40 ${
-            showOriginal ? "bg-gray-800 text-white" : "bg-gray-100 text-gray-700"
+            showOriginal
+              ? "bg-gray-800 text-white"
+              : "bg-gray-100 text-gray-700"
           }`}
         >
           <FileText size={13} /> المقرَّر الأصلي
@@ -128,8 +246,20 @@ export default function CurriculumWorkspace({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              // Enter ينتقل للتالي، وShift+Enter للسابق — كبحث المتصفّح
+              if (!hits.length) return;
+              if (!jumpedRef.current) {
+                jumpedRef.current = true;
+                gotoHit(0);
+                return;
+              }
+              gotoHit(e.shiftKey ? hitIdx - 1 : hitIdx + 1);
+            }}
             dir="rtl"
-            placeholder="صفِّ النصّ بكلمة…"
+            placeholder="ابحث وانتقل إلى الكلمة…"
             className="w-56 pr-8 pl-7 py-2 rounded-xl border border-gray-200 text-xs font-arabic outline-none focus:border-brand"
           />
           {q && (
@@ -141,6 +271,45 @@ export default function CurriculumWorkspace({
             </button>
           )}
         </div>
+
+        {/* التنقّل بين المطابقات — هذا ما يفيد، لا رقم السطر */}
+        {q.trim() && (
+          <div className="flex items-center gap-1">
+            <span
+              className={`text-xs font-bold tabular-nums px-1.5 ${
+                hits.length ? "text-gray-600" : "text-red-500"
+              }`}
+            >
+              {hits.length ? `${hitIdx + 1}/${hits.length}` : "لا نتيجة"}
+            </span>
+            <button
+              onClick={() => {
+                jumpedRef.current = true;
+                gotoHit(hitIdx - 1);
+              }}
+              disabled={!hits.length}
+              title="السابق (Shift+Enter)"
+              className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-brand disabled:opacity-30"
+            >
+              <ChevronUp size={14} />
+            </button>
+            <button
+              onClick={() => {
+                if (!jumpedRef.current) {
+                  jumpedRef.current = true;
+                  gotoHit(0);
+                  return;
+                }
+                gotoHit(hitIdx + 1);
+              }}
+              disabled={!hits.length}
+              title="التالي (Enter)"
+              className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-brand disabled:opacity-30"
+            >
+              <ChevronDown size={14} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* إحصاء مختصر — يكشف نقصاً قبل أن يُكتشف في التطبيق */}
@@ -150,24 +319,6 @@ export default function CurriculumWorkspace({
         {q.trim() ? ` · ${hits.length} موضعاً لـ«${q.trim()}»` : ""}
       </div>
 
-      {q.trim() ? (
-        <div className="max-h-40 overflow-y-auto border-b border-gray-100 bg-amber-50/40">
-          {hits.length === 0 ? (
-            <p className="text-xs text-gray-400 p-3 m-0">لا نتيجة</p>
-          ) : (
-            hits.map((h) => (
-              <div
-                key={h.line}
-                className="px-3 py-1.5 text-xs text-gray-700 border-b border-amber-100/60 last:border-0"
-              >
-                <span className="text-gray-400 ml-2">سطر {h.line}</span>
-                {h.text.slice(0, 160)}
-              </div>
-            ))
-          )}
-        </div>
-      ) : null}
-
       <div className="flex overflow-hidden" style={{ height }}>
         {showOriginal && (
           <div className="w-1/2 border-l border-gray-100">
@@ -176,16 +327,59 @@ export default function CurriculumWorkspace({
         )}
 
         {(mode === "edit" || mode === "split") && (
-          <textarea
-            value={text}
-            onChange={(e) => onChange(e.target.value)}
-            dir="rtl"
-            spellCheck={false}
-            placeholder="نص المحاضرة بصيغة ماركداون — أو امسحه ضوئياً أو فرّغه صوتياً"
-            className={`${
+          <div
+            className={`relative ${
               mode === "split" ? "flex-1 border-l border-gray-100" : "flex-1"
-            } p-4 text-[17px] leading-9 font-arabic outline-none resize-none`}
-          />
+            }`}
+          >
+            {/* الطبقة الخلفية: النصّ نفسه بمقاييس المحرِّر حرفياً، فيها
+                <mark> على كل مطابقة. أي فرقٍ في الخطّ أو الحشو أو ارتفاع
+                السطر يُزيح اللون عن الكلمة، فالأصناف موحّدة بين الاثنين. */}
+            <div
+              ref={backdropRef}
+              aria-hidden="true"
+              dir="rtl"
+              className={`absolute inset-0 overflow-hidden pointer-events-none whitespace-pre-wrap break-words ${EDITOR_TEXT} text-transparent`}
+              // شريط التمرير يقتطع من عرض المحتوى في الـtextarea؛ فإن لم
+              // تحجز الطبقة العرض نفسه اختلف موضع لفّ الأسطر بينهما
+              // وانزاح اللون عن الكلمة. الحجز الثابت يوحّد العرضين.
+              style={{ scrollbarGutter: "stable" }}
+            >
+              {segments.map((sg, k) =>
+                sg.hit === -1 ? (
+                  <span key={k}>{sg.t}</span>
+                ) : (
+                  <mark
+                    key={k}
+                    ref={(el) => {
+                      markRefs.current[sg.hit] = el;
+                    }}
+                    className={`rounded text-transparent ${
+                      sg.hit === hitIdx
+                        // الحالية بلونٍ صارخ، والبقيّة بلونٍ هادئ: الفرق بينهما
+                        // هو ما يجعل «التالي» مفهوماً بلا قراءة
+                        ? "bg-orange-400/70 ring-2 ring-orange-500"
+                        : "bg-amber-200/60"
+                    }`}
+                  >
+                    {sg.t}
+                  </mark>
+                ),
+              )}
+            </div>
+
+            <textarea
+              ref={editorRef}
+              value={text}
+              onChange={(e) => onChange(e.target.value)}
+              onScroll={syncScroll}
+              dir="rtl"
+              spellCheck={false}
+              placeholder="نص المحاضرة بصيغة ماركداون — أو امسحه ضوئياً أو فرّغه صوتياً"
+              className={`relative w-full h-full bg-transparent ${EDITOR_TEXT} outline-none resize-none`}
+              style={{ scrollbarGutter: "stable" }}
+            />
+          </div>
         )}
 
         {(mode === "preview" || mode === "split") && (
@@ -201,7 +395,9 @@ export default function CurriculumWorkspace({
         {showImages && (
           <div className="w-64 border-r border-gray-100 overflow-y-auto p-3 bg-gray-50">
             <p className="text-xs font-bold text-gray-600 mb-2">صور المحاضرة</p>
-            {imgs.length === 0 && <p className="text-xs text-gray-400">لا صور</p>}
+            {imgs.length === 0 && (
+              <p className="text-xs text-gray-400">لا صور</p>
+            )}
             <div className="flex flex-col gap-2">
               {imgs.map((im, i) => (
                 <div

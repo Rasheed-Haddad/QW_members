@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 import {
   ScanLine,
@@ -15,7 +15,7 @@ import {
   AlertTriangle,
   Undo2,
   AudioLines,
-} from "lucide-react";
+  Brain,} from "lucide-react";
 import { scanLecture, checkR2 } from "../lib/mistralOcr";
 import { transcribeAudio } from "../lib/transcribe";
 import { chunkLines } from "../lib/promptSettings";
@@ -38,6 +38,12 @@ import {
 // ونسخةٌ واحدة من المنطق لا نسختان تفترقان.
 const MISTRAL_KEY_STORE = "mistral_api_key";
 const WAIT_BETWEEN_CHUNKS = 6500;
+// مهلة الطلب الواحد: بلا مهلة يبقى axios منتظراً إلى الأبد إن سكت الخادم أو
+// علقت الشبكة، فتظهر شاشة «جارٍ التدقيق» ساعاتٍ بلا نتيجة ولا خطأ.
+const CHUNK_TIMEOUT_MS = 180000; // ثلاث دقائق تكفي أطول دفعة
+// سقف انتظار الحصّة: retryAfter قد يعود بآلاف الثواني، وانتظارها صامتاً
+// يبدو تعليقاً. ما تجاوز السقف يُبلَّغ خطأً ليقرّر المحرِّر.
+const MAX_QUOTA_WAIT_S = 90;
 
 // قائمة احتياطية حين يتعذّر جلبها من الحساب
 const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-2.0-flash"];
@@ -222,39 +228,74 @@ export const OcrAction = ({ lectureName, subjectName, onText, onFile }) => {
 // سطر تصحيح واحد. **خارج** جسم SpellAction عمداً: تعريفه داخله يجعل React
 // يراه نوعَ مكوّنٍ جديداً عند كل ضغطة حرف، فيهدم الحقل ويبنيه — فيقفز المؤشّر
 // خارج الحقل ويعود التمرير إلى الأعلى.
-const SpellRow = ({ c, text, onField, muted }) => {
+//
+// **العزل**: كان كل حرفٍ يُكتب في «الآن» يرفع الحالة إلى الأب، فتُبنى مصفوفة
+// التصحيحات كلّها وتُرسم الصفوف الثلاثون من جديد — عشر ثوانٍ للحرف الواحد.
+// الآن: النصّ مسوّدةٌ محلّية لا تُصعَّد إلا عند مغادرة الحقل، والصفّ ملفوف
+// بـmemo فلا يُعاد رسمه إلا إذا تغيّر تصحيحه هو.
+const SpellRow = memo(function SpellRow({ c, text, onField, muted }) {
   const line = String(text || "").split("\n")[Number(c.line)] || "";
   const idx = line.indexOf(c.before);
   const before = idx >= 0 ? line.slice(0, idx) : "";
   const after = idx >= 0 ? line.slice(idx + c.before.length) : "";
+
+  // مسوّدة الحقل: تعيش هنا وحدها أثناء الكتابة فلا يُرسَم غيرُ هذا الصفّ
+  const [draft, setDraft] = useState(c.after);
+  // تُزامَن حين يتغيّر التصحيح من الخارج (إعادة تدقيق) لا مع كل ضغطة
+  useEffect(() => setDraft(c.after), [c.key, c.after]);
+
+  const commit = () => {
+    if (draft !== c.after) onField(c.key, "after", draft);
+  };
+
   return (
     <div
       className={`grid grid-cols-[auto_1fr_auto_1fr] gap-2.5 items-start px-3 py-2.5 border-b border-gray-100 ${
         muted ? "bg-gray-50/60" : ""
       }`}
     >
-      <button
-        onClick={() => onField(c.key, "on", !c.on)}
-        className={`w-6 h-6 mt-1 rounded-md flex items-center justify-center shrink-0 ${
-          c.on ? "bg-green-500 text-white" : "bg-gray-200 text-gray-400"
-        }`}
-      >
-        {c.on && <Check size={14} />}
-      </button>
+      {/* قراران مستقلّان: أيُطبَّق على النصّ؟ وأيدخل سجلّ ما يتعلّمه النموذج؟ */}
+      <div className="flex flex-col items-center gap-1.5 shrink-0">
+        <button
+          onClick={() => onField(c.key, "on", !c.on)}
+          title={c.on ? "سيُطبَّق على النصّ" : "لن يُطبَّق"}
+          className={`w-6 h-6 mt-1 rounded-md flex items-center justify-center ${
+            c.on ? "bg-green-500 text-white" : "bg-gray-200 text-gray-400"
+          }`}
+        >
+          {c.on && <Check size={14} />}
+        </button>
+        {/* يبدأ معطَّلاً عمداً: أكثر التصحيحات عارضةٌ لا قاعدة، وإدخالها
+            كلّها في السجلّ يُغرقه بما لا يتكرّر ثمّ يُقترح في غير موضعه. */}
+        <button
+          onClick={() => onField(c.key, "learn", !c.learn)}
+          title={
+            c.learn
+              ? "سيدخل سجلّ التصحيحات المتعلَّمة"
+              : "لن يدخل السجلّ — فعّله إن كان تصحيحاً متكرّراً يستحقّ التعلّم"
+          }
+          className={`w-6 h-6 rounded-md flex items-center justify-center border ${
+            c.learn
+              ? "bg-brand text-white border-transparent"
+              : "bg-white text-gray-300 border-gray-200 hover:border-brand/40"
+          }`}
+        >
+          <Brain size={13} />
+        </button>
+      </div>
       <div className="min-w-0">
-        <span className="block text-sm font-semibold text-red-700 line-through">
+        <span className="block text-base font-bold text-red-700">
           {c.before}
         </span>
         {/* السطر كاملاً — الحكم على التصحيح يحتاج الجملة لا أوّلها */}
         <span
-          className="block text-[11px] text-gray-500 leading-6 mt-1 font-arabic"
+          className="block text-[15px] text-gray-700 leading-8 mt-1 font-arabic"
           dir="rtl"
         >
-          <span className="text-gray-400">سطر {c.line}: </span>
           {idx >= 0 ? (
             <>
               {before}
-              <mark className="bg-amber-200 rounded px-0.5">{c.before}</mark>
+              <mark className="bg-amber-200 rounded px-1 font-bold">{c.before}</mark>
               {after}
             </>
           ) : (
@@ -263,22 +304,36 @@ const SpellRow = ({ c, text, onField, muted }) => {
             </span>
           )}
         </span>
-        {c.reason && (
-          <span className="block text-[11px] text-gray-500 mt-0.5">
-            رُفض آلياً: {c.reason}
+        {/* تنبيهٌ لا إقصاء: الرفض الآلي أُلغي، والحرّاس تُعلِّق وتترك الحكم لك */}
+        {(c.note || c.reason) && (
+          <span className="block text-[12px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-1.5 py-0.5 mt-1">
+            تنبيه: {c.note || c.reason}
           </span>
         )}
       </div>
       <span className="text-gray-300 text-sm mt-1.5">←</span>
-      <input
-        value={c.after}
-        onChange={(e) => onField(c.key, "after", e.target.value)}
+      {/* textarea لا input: النصّ المصحَّح قد يكون جملةً كاملة، والحقل
+          السطريّ يقصّ ما لا يُرى فيُقبل تصحيحٌ لم يُقرأ. يتمدّد بمحتواه. */}
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onInput={(e) => {
+          e.currentTarget.style.height = "auto";
+          e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
+        }}
+        ref={(el) => {
+          if (!el) return;
+          el.style.height = "auto";
+          el.style.height = `${el.scrollHeight}px`;
+        }}
+        rows={1}
         dir="rtl"
-        className="w-full px-2.5 py-1.5 mt-0.5 rounded-lg border border-gray-200 text-sm font-semibold text-green-800 bg-green-50/40 outline-none focus:border-brand"
+        className="w-full px-2.5 py-2 mt-0.5 rounded-lg border border-gray-200 text-[15px] font-semibold text-green-800 bg-green-50/40 outline-none focus:border-brand resize-y leading-7 font-arabic overflow-hidden"
       />
     </div>
   );
-};
+});
 
 
 export const SpellAction = ({ text, onText }) => {
@@ -291,7 +346,8 @@ export const SpellAction = ({ text, onText }) => {
   const [models, setModels] = useState([]);
   const [model, setModel] = useState("");
   const [report, setReport] = useState(null);
-  const [showRejected, setShowRejected] = useState(false);
+  // إلغاءٌ يقرأه الحلقة بين الدفعات — بدونه لا مخرج من تدقيقٍ طال
+  const cancelRef = useRef(false);
 
   useEffect(() => {
     axios
@@ -314,6 +370,10 @@ export const SpellAction = ({ text, onText }) => {
     setError(null);
     setProgress(null);
     setOpen(true);
+    // حجم الدفعة يُجلَب عند الفتح لا عند البدء: كان العدد المعروض
+    // («N دفعة») يُحسب دائماً بقيمة المصنع ١٢٠ لأن chunkSize لا يُحدَّث إلا
+    // داخل run — فيبدو الإعداد كأنه لا يعمل وهو يعمل.
+    chunkLines().then(setChunkSize);
   };
 
   const run = async () => {
@@ -323,43 +383,76 @@ export const SpellAction = ({ text, onText }) => {
     setBusy(true);
     setError(null);
     setReport(null);
+    cancelRef.current = false;
     const chunks = buildChunks(text, await chunkLines());
     const raw = [];
     let quotaRetries = 0;
     try {
       for (let i = 0; i < chunks.length; i++) {
+        if (cancelRef.current) throw new Error("أُلغي التدقيق");
         setProgress({ done: i, total: chunks.length });
         try {
           // eslint-disable-next-line no-await-in-loop
-          const r = await axios.post(`${API_BASE_URL}/production/spellcheck`, {
-            PASSWORD,
-            text: chunks[i].text,
-            model,
-            learned: learnedForPrompt(),
-          });
+          const r = await axios.post(
+            `${API_BASE_URL}/production/spellcheck`,
+            {
+              PASSWORD,
+              text: chunks[i].text,
+              model,
+              learned: learnedForPrompt(),
+            },
+            { timeout: CHUNK_TIMEOUT_MS },
+          );
           raw.push(...(r.data?.corrections || []));
         } catch (e) {
-          const wait = e?.response?.data?.retryAfter;
-          if (wait && quotaRetries < 3) {
+          // انتهاء المهلة يُقال صراحةً: «تعذّر الاتصال» وحدها لا تدلّ على شيء
+          if (e?.code === "ECONNABORTED") {
+            throw new Error(
+              `الدفعة ${i + 1} تجاوزت ${CHUNK_TIMEOUT_MS / 1000} ثانية بلا ردّ — جرّب نموذجاً أسرع أو صغّر حجم الدفعة من الإعدادات`,
+            );
+          }
+          const wait = Number(e?.response?.data?.retryAfter) || 0;
+          if (wait && wait <= MAX_QUOTA_WAIT_S && quotaRetries < 3) {
             quotaRetries += 1;
-            setProgress({ done: i, total: chunks.length, waiting: wait });
-            // eslint-disable-next-line no-await-in-loop
-            await new Promise((r2) => setTimeout(r2, wait * 1000));
+            // عدٌّ تنازليّ مرئي: الانتظار الصامت لا يُفرَّق عن التعليق
+            for (let s = wait; s > 0; s--) {
+              if (cancelRef.current) throw new Error("أُلغي التدقيق");
+              setProgress({ done: i, total: chunks.length, waiting: s });
+              // eslint-disable-next-line no-await-in-loop
+              await new Promise((r2) => setTimeout(r2, 1000));
+            }
             i -= 1;
             // eslint-disable-next-line no-continue
             continue;
           }
+          if (wait > MAX_QUOTA_WAIT_S) {
+            throw new Error(
+              `الحصّة مستنفدة ويطلب الانتظار ${wait} ثانية — جرّب نموذجاً آخر أو عد لاحقاً`,
+            );
+          }
           throw e;
         }
         if (i < chunks.length - 1) {
+          if (cancelRef.current) throw new Error("أُلغي التدقيق");
           // eslint-disable-next-line no-await-in-loop
           await new Promise((r2) => setTimeout(r2, WAIT_BETWEEN_CHUNKS));
         }
       }
       const { accepted, rejected } = screenCorrections(raw, text);
       setReport({
-        accepted: accepted.map((c, i) => ({ ...c, key: `a${i}`, on: true })),
-        rejected: rejected.map((c, i) => ({ ...c, key: `r${i}`, on: false })),
+        // on: يُطبَّق افتراضياً · learn: لا يدخل السجلّ إلا باختيارك
+        accepted: accepted.map((c, i) => ({
+          ...c,
+          key: `a${i}`,
+          on: true,
+          learn: false,
+        })),
+        rejected: rejected.map((c, i) => ({
+          ...c,
+          key: `r${i}`,
+          on: false,
+          learn: false,
+        })),
       });
     } catch (e) {
       setError(e?.response?.data?.message || e.message);
@@ -369,7 +462,9 @@ export const SpellAction = ({ text, onText }) => {
     }
   };
 
-  const setField = (key, field, value) =>
+  // useCallback بمصفوفة فارغة: مرجعٌ ثابت مدى عمر المكوّن. لو تغيّر مع كل
+  // رسمة لبطل memo على الصفوف وعاد البطء كما كان.
+  const setField = useCallback((key, field, value) => {
     setReport((p) => ({
       accepted: p.accepted.map((c) =>
         c.key === key ? { ...c, [field]: value } : c,
@@ -378,6 +473,7 @@ export const SpellAction = ({ text, onText }) => {
         c.key === key ? { ...c, [field]: value } : c,
       ),
     }));
+  }, []);
 
   const chosen = report
     ? [...report.accepted, ...report.rejected].filter(
@@ -386,7 +482,8 @@ export const SpellAction = ({ text, onText }) => {
     : [];
 
   const apply = () => {
-    recordAccepted(chosen);
+    // السجلّ يأخذ ما أشّرتَ عليه وحده — لا كلّ ما طُبِّق
+    recordAccepted(chosen.filter((c) => c.learn));
     const r = applyCorrections(text, chosen);
     onText(r.text, r);
     setOpen(false);
@@ -418,7 +515,7 @@ export const SpellAction = ({ text, onText }) => {
                 </h3>
                 <p className="text-xs text-gray-400">
                   {report
-                    ? `${report.accepted.length} مقترح · ${report.rejected.length} مرفوض آلياً · اختير ${chosen.length}`
+                    ? `${report.accepted.length} مقترح · اختير ${chosen.length}`
                     : "الأرقام لا تُمَسّ · تراجع كل كلمة قبل التطبيق"}
                 </p>
               </div>
@@ -481,6 +578,24 @@ export const SpellAction = ({ text, onText }) => {
                       ? `تجاوز الحصة — انتظار ${progress.waiting} ثانية`
                       : `دفعة ${(progress?.done ?? 0) + 1} من ${progress?.total ?? "?"}`}
                   </p>
+                  {progress?.total > 0 && (
+                    <div className="mx-auto mt-3 h-1.5 w-64 rounded-full bg-gray-100 overflow-hidden">
+                      <div
+                        className="h-full bg-brand transition-all"
+                        style={{
+                          width: `${((progress.done || 0) / progress.total) * 100}%`,
+                        }}
+                      />
+                    </div>
+                  )}
+                  <button
+                    onClick={() => {
+                      cancelRef.current = true;
+                    }}
+                    className="mt-4 text-xs font-semibold text-red-600 border border-red-200 rounded-lg px-4 py-2"
+                  >
+                    ألغِ التدقيق
+                  </button>
                 </div>
               )}
 
@@ -507,24 +622,6 @@ export const SpellAction = ({ text, onText }) => {
                   {report.accepted.map((c) => (
                     <SpellRow key={c.key} c={c} text={text} onField={setField} />
                   ))}
-                  {report.rejected.length > 0 && (
-                    <>
-                      <button
-                        onClick={() => setShowRejected((v) => !v)}
-                        className="w-full flex items-center gap-2 px-3 py-2.5 bg-gray-50 text-xs font-semibold text-gray-600 border-y border-gray-200"
-                      >
-                        <ChevronDown
-                          size={14}
-                          className={showRejected ? "" : "-rotate-90"}
-                        />
-                        {report.rejected.length} اقتراحاً رفضته القواعد
-                      </button>
-                      {showRejected &&
-                        report.rejected.map((c) => (
-                          <SpellRow key={c.key} c={c} text={text} onField={setField} muted />
-                        ))}
-                    </>
-                  )}
                 </>
               )}
             </div>

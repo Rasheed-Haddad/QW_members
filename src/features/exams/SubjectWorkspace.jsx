@@ -7,6 +7,8 @@ import {
   Loader2,
   AlertTriangle,
   Trash2,
+  PanelRightClose,
+  PanelRightOpen,
   ShieldCheck,
   ShieldAlert,
   Link2,
@@ -98,6 +100,23 @@ export default function SubjectWorkspace() {
       setBusy(false);
     }
   };
+
+  // طيّ الشريط: المحتوى هو العمل، والقائمة مرجعٌ يُفتح عند الحاجة.
+  // يُحفظ الاختيار — من يطويه يريده مطويّاً في كل مرّة.
+  const [railOpen, setRailOpen] = useState(() => {
+    try {
+      return localStorage.getItem("subject_rail") !== "closed";
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("subject_rail", railOpen ? "open" : "closed");
+    } catch {
+      // لا شيء
+    }
+  }, [railOpen]);
 
   const doRemove = async (lid) => {
     const l = lectures.find((x) => x.lecture_id === lid);
@@ -205,17 +224,43 @@ export default function SubjectWorkspace() {
       )}
 
       {/* بيانات المادة: لوحة تنطوي في مكانها بدل شاشة منفصلة تُفقد السياق */}
-      <div className="px-4 pt-4">
+      <div className="px-3 pt-3">
         <SubjectFieldsPanel
           subjectId={id}
           onRenamed={(n) => setSubject((s0) => (s0 ? { ...s0, name: n } : s0))}
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[290px_1fr] gap-4 p-4 items-start">
-        {/* شريط المحاضرات */}
-        <div className="bg-white rounded-2xl border border-gray-100 p-3 lg:sticky lg:top-20">
-          <div className="flex items-center gap-2 mb-3">
+      {/* الهوامش مضغوطة والفجوة أصغر: المساحة للمحتوى لا للفراغ.
+          وminmax(0,1fr) لا 1fr: المسار الافتراضي min-width:auto فاسمٌ طويل
+          يوسّع العمود فوق حصّته ويزحف على جاره. */}
+      <div
+        className={`grid grid-cols-1 gap-3 px-3 pb-3 pt-2 items-start ${
+          railOpen
+            ? "lg:grid-cols-[268px_minmax(0,1fr)]"
+            : "lg:grid-cols-[44px_minmax(0,1fr)]"
+        }`}
+      >
+        {/* شريط المحاضرات — يُطوى إلى شريطٍ رفيع فتتّسع مساحة العمل */}
+        <div
+          className={`bg-white rounded-2xl border border-gray-100 lg:sticky lg:top-20 ${
+            railOpen ? "p-2.5" : "p-1.5"
+          }`}
+        >
+          {!railOpen ? (
+            <button
+              onClick={() => setRailOpen(true)}
+              title={`المحاضرات (${lectures.length})`}
+              className="w-full flex flex-col items-center gap-2 py-2 text-gray-500 hover:text-brand"
+            >
+              <PanelRightOpen size={17} />
+              <span className="text-[11px] font-bold text-brand">
+                {lectures.length}
+              </span>
+            </button>
+          ) : (
+          <>
+          <div className="flex items-center gap-2 mb-2.5">
             <Layers size={16} className="text-brand" />
             <h2 className="text-sm font-bold text-gray-800">المحاضرات</h2>
             <button
@@ -224,6 +269,13 @@ export default function SubjectWorkspace() {
               title="أضف محاضرة"
             >
               <Plus size={15} />
+            </button>
+            <button
+              onClick={() => setRailOpen(false)}
+              className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100"
+              title="اطوِ الشريط"
+            >
+              <PanelRightClose size={15} />
             </button>
           </div>
 
@@ -263,7 +315,7 @@ export default function SubjectWorkspace() {
             </div>
           )}
 
-          <div className="flex flex-col gap-1.5 max-h-[62vh] overflow-y-auto">
+          <div className="flex flex-col gap-1 max-h-[68vh] overflow-y-auto pl-0.5">
             {lectures.length === 0 && (
               <p className="text-xs text-gray-400 text-center py-6">
                 لا محاضرات — أضف واحدة بالزرّ أعلاه
@@ -277,8 +329,12 @@ export default function SubjectWorkspace() {
                 <div
                   key={l.lecture_id}
                   onClick={() => setSelected(l.lecture_id)}
-                  className={`rounded-xl border p-2.5 cursor-pointer transition-colors ${
-                    active ? "border-brand bg-brand/5" : "border-gray-200 hover:bg-gray-50"
+                  className={`rounded-xl border px-2.5 py-2 cursor-pointer transition-colors ${
+                    active
+                      // المختارة تُميَّز بحدٍّ سميك وخلفية صريحة: التمييز
+                      // بحدٍّ رفيع وحده لا يُقرأ في قائمةٍ من أربعين سطراً
+                      ? "border-brand bg-brand/10 ring-1 ring-brand/30"
+                      : "border-transparent bg-gray-50/70 hover:bg-gray-100"
                   }`}
                 >
                   <div className="flex items-center gap-1.5">
@@ -347,6 +403,8 @@ export default function SubjectWorkspace() {
               );
             })}
           </div>
+          </>
+          )}
         </div>
 
         {/* محتوى المحاضرة */}

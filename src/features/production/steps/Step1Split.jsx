@@ -15,6 +15,7 @@ import {
 import JSZip from "jszip";
 import {
   openForView,
+  inspectPageFonts,
   mergeFiles,
   bytesOfFile,
   pageAspect,
@@ -33,12 +34,15 @@ import {
   sanitizeName,
   applyBulkNames,
   newRangeId,
+  toggleDropped,
+  producing,
 } from "../lib/ranges";
 import { compressPdf, LEVELS, fmtMB } from "../lib/pdfCompress";
 import { usePipeline } from "../pipelineStore";
 import PageGrid from "../components/PageGrid";
 import CoverageBar from "../components/CoverageBar";
 import RangeList from "../components/RangeList";
+import SplitNameModal from "../components/SplitNameModal";
 
 // ─── الخطوة ١: تقسيم المقرر ───────────────────────────────────────────────────
 // ثلاث حالات: لا ملف بعد ← اختيار طريقة التعامل مع عدة ملفات ← التقسيم.
@@ -192,6 +196,60 @@ export default function Step1Split() {
   // تنظيف مستند pdf.js عند الاستبدال أو المغادرة — تسريب ذاكرة صامت لولاه
   useEffect(() => () => pdf?.destroy?.(), [pdf]);
 
+  // صفحةٌ يُنتظر تأكيد شقّها — تُفتح عليها نافذة التسمية
+  const [splitAsk, setSplitAsk] = useState(null);
+
+  // معاينةٌ بعارض المتصفّح الأصلي: حين يكون ترميز المقرَّر تالفاً تخرج
+  // الحروف مقطوشة في رسم pdf.js، وهذا محرِّكٌ آخر يقرأها غالباً. للقراءة
+  // فقط — التقسيم يبقى على الشبكة لأنه يحتاج النقر على الصفحات.
+  const [previewUrl, setPreviewUrl] = useState("");
+  const openNativePreview = useCallback(() => {
+    const bytes = getMerged();
+    if (!bytes?.length) return;
+    const url = URL.createObjectURL(
+      new Blob([bytes.slice(0)], { type: "application/pdf" }),
+    );
+    setPreviewUrl(url);
+  }, [getMerged]);
+  useEffect(
+    () => () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    },
+    [previewUrl],
+  );
+
+  // اقتراح الاسم من أوّل سطرٍ ذي معنى في الصفحة: في المقررات النصّية يكون
+  // عنوان المحاضرة، فيصير التأكيد ضغطةَ Enter واحدة. ويفشل بهدوء في
+  // الممسوحة ضوئياً (لا طبقة نصّ) فيبقى الحقل فارغاً.
+  const askSplit = useCallback(
+    async (page) => {
+      setSplitAsk({ page, suggestion: "" });
+      if (!pdf) return;
+      const line = await firstMeaningfulLine(pdf, page);
+      if (!line) return;
+      setSplitAsk((cur) =>
+        cur && cur.page === page ? { ...cur, suggestion: sanitizeName(line) } : cur,
+      );
+    },
+    [pdf],
+  );
+
+  // منفذ تشخيصٍ من الكونسول: __pdfFonts(1) يقول أخطوطُ الصفحة مُضمَّنةٌ أم لا.
+  // الحروف المقطوشة إمّا عطبُ رسمٍ نُصلحه، أو خطٌّ غير مُضمَّن في الملف نفسه
+  // فلا يُصلحه إعداد — والتمييز بينهما لا يُدرك بالنظر إلى الصورة.
+  useEffect(() => {
+    if (!pdf) return undefined;
+    window.__pdfFonts = (n = 1) =>
+      inspectPageFonts(pdf, n).then((r) => {
+        // eslint-disable-next-line no-console
+        console.table(r);
+        return r;
+      });
+    return () => {
+      delete window.__pdfFonts;
+    };
+  }, [pdf]);
+
   // ─── إجراءات النطاقات ───────────────────────────────────────────────────────
   const setRanges = useCallback(
     (next) => dispatch({ type: "ranges", ranges: next }),
@@ -218,7 +276,7 @@ export default function Step1Split() {
     setBusy("جارٍ استخراج الأسماء…");
     let next = ranges;
     for (const r of sorted(ranges)) {
-      if (r.name.trim()) continue;
+      if (r.dropped || r.name.trim()) continue;
       // eslint-disable-next-line no-await-in-loop
       const line = await firstMeaningfulLine(pdf, r.start);
       if (line) next = updateRange(next, r.id, "name", line, pageCount);
@@ -231,7 +289,8 @@ export default function Step1Split() {
   const doCut = async () => {
     const bytes = getMerged();
     if (!bytes || !report.ok) return;
-    const list = sorted(ranges).map((r) => ({
+    // المهمَل يُستبعد هنا: لا يُقصّ ولا يُحمَّل ولا يكلّف مسحاً ضوئياً
+    const list = producing(ranges).map((r) => ({
       ...r,
       name: sanitizeName(r.name),
     }));
@@ -266,7 +325,7 @@ export default function Step1Split() {
     if (!bytes) return;
     setBusy("جارٍ تجهيز الملف المضغوط…");
     try {
-      const list = sorted(ranges).map((r) => ({ ...r, name: sanitizeName(r.name) }));
+      const list = producing(ranges).map((r) => ({ ...r, name: sanitizeName(r.name) }));
       const cuts = await cutAll(bytes, list, (done, total, name) =>
         setCutProgress({ done, total, name }),
       );
@@ -539,10 +598,17 @@ export default function Step1Split() {
               : `${sourceFiles.length} ملفات مدموجة`}
           </p>
           <p className="text-xs text-gray-400">
-            {pageCount} صفحة · {sorted(ranges).length} محاضرة
+            {pageCount} صفحة · {producing(ranges).length} محاضرة
           </p>
         </div>
         <div className="mr-auto flex items-center gap-2">
+          <button
+            onClick={openNativePreview}
+            title="افتح المقرَّر بعارض المتصفّح — أوضح حين يكون ترميز الملف تالفاً"
+            className="text-xs text-brand bg-brand/10 border border-brand/20 rounded-xl px-3 py-2 flex items-center gap-1.5"
+          >
+            <FileText size={13} /> اعرض الأصل
+          </button>
           <button
             onClick={suggestAll}
             disabled={Boolean(busy)}
@@ -627,7 +693,9 @@ export default function Step1Split() {
       )}
 
       {/* الشبكة + القائمة */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 items-start">
+      {/* minmax(0,1fr) لا 1fr: مسار الشبكة الافتراضي min-width:auto، فاسمُ
+          محاضرةٍ طويل يوسّع العمود فوق حصّته ويزحف على ما جاوره. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-4 items-start">
         {isKeepMode ? (
           <div className="bg-white rounded-2xl border border-gray-100 p-6 text-center">
             <CheckCircle2 size={24} className="text-emerald-500 mx-auto mb-2" />
@@ -648,14 +716,18 @@ export default function Step1Split() {
               ranges={ranges}
               boundaries={boundaries}
               focusPage={focusPage}
-              onSplit={(p) => setRanges(splitAt(ranges, p))}
+              onSplit={askSplit}
               onMerge={(p) => setRanges(mergeAt(ranges, p))}
             />
           )
         )}
 
+        {/* RangeList مبنيّ ليَسكن صندوقاً محدود الارتفاع: جذعه h-full وقائمته
+            flex-1 overflow-y-auto. وmax-height وحدها لا تكفي — بلا flex لا
+            يجد h-full ارتفاعاً يُنسب إليه، وبلا overflow تتجاوز القائمة
+            الصندوق فتنسكب على زرّ «متابعة إلى المسح الضوئي» تحتها. */}
         <div
-          className="bg-white rounded-2xl border border-gray-100 p-4"
+          className="bg-white rounded-2xl border border-gray-100 p-4 flex flex-col overflow-hidden"
           style={{ maxHeight: "min(68vh, 760px)" }}
         >
           <RangeList
@@ -666,6 +738,7 @@ export default function Step1Split() {
               setRanges(updateRange(ranges, id, f, v, pageCount))
             }
             onRemove={(id) => setRanges(removeRange(ranges, id))}
+            onToggleDropped={(id) => setRanges(toggleDropped(ranges, id))}
             onJump={(p) => setFocusPage(p)}
             onSuggestName={handleSuggestName}
             onBulkName={(prefix) => setRanges(applyBulkNames(ranges, prefix))}
@@ -697,8 +770,13 @@ export default function Step1Split() {
             {report.ok ? (
               <span className="flex items-center gap-1.5 text-green-700">
                 <CheckCircle2 size={16} />
-                {sorted(ranges).length} محاضرة جاهزة · {report.coveredPages} من{" "}
+                {producing(ranges).length} محاضرة جاهزة · {report.coveredPages} من{" "}
                 {pageCount} صفحة مغطّاة
+                {ranges.length - producing(ranges).length > 0 && (
+                  <span className="text-amber-600">
+                    {" "}· {ranges.length - producing(ranges).length} مهمَل
+                  </span>
+                )}
               </span>
             ) : (
               "أصلح ما يمنع المتابعة أعلاه"
@@ -719,6 +797,53 @@ export default function Step1Split() {
           متابعة إلى المسح الضوئي
         </button>
       </div>
+
+      {previewUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex flex-col p-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              URL.revokeObjectURL(previewUrl);
+              setPreviewUrl("");
+            }
+          }}
+        >
+          <div className="bg-white rounded-2xl overflow-hidden flex flex-col w-full h-full max-w-6xl mx-auto">
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-100">
+              <FileText size={15} className="text-brand" />
+              <span className="text-sm font-bold text-gray-800 flex-1">
+                المقرَّر الأصلي — عارض المتصفّح
+              </span>
+              <button
+                onClick={() => {
+                  URL.revokeObjectURL(previewUrl);
+                  setPreviewUrl("");
+                }}
+                className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <iframe
+              src={previewUrl}
+              title="المقرَّر الأصلي"
+              className="flex-1 w-full border-0"
+            />
+          </div>
+        </div>
+      )}
+
+      {splitAsk && (
+        <SplitNameModal
+          page={splitAsk.page}
+          suggestion={splitAsk.suggestion}
+          onCancel={() => setSplitAsk(null)}
+          onConfirm={({ name, dropped }) => {
+            setRanges(splitAt(ranges, splitAsk.page, name, dropped));
+            setSplitAsk(null);
+          }}
+        />
+      )}
     </div>
   );
 }
