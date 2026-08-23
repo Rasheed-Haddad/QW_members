@@ -381,6 +381,10 @@ export default function LectureTabs({
                       setDraft((d) => ({ ...d, curriculum: t }));
                       markDirty("curriculum");
                     }}
+                    // الورق نفسه بجانب التصحيحات — ومن رفعه هنا
+                    // يجده في لوح المقارنة أيضاً: الحالة واحدة.
+                    pdfBytes={pdfBytes}
+                    onPdfBytes={setPdfBytes}
                   />
                 </>
               }

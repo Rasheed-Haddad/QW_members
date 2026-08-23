@@ -20,6 +20,7 @@ import { scanLecture, checkR2 } from "../lib/mistralOcr";
 import { transcribeAudio } from "../lib/transcribe";
 import { chunkLines } from "../lib/promptSettings";
 import { bytesOfFile } from "../lib/pdfEngine";
+import PdfPane from "./PdfPane";
 import {
   buildChunks,
   CHUNK_LINES,
@@ -336,7 +337,7 @@ const SpellRow = memo(function SpellRow({ c, text, onField, muted }) {
 });
 
 
-export const SpellAction = ({ text, onText }) => {
+export const SpellAction = ({ text, onText, pdfBytes, onPdfBytes }) => {
   // حجم الدفعة كما ضبطه المحرِّر — للعرض وحده، والتقسيم يقرأه عند التشغيل
   const [chunkSize, setChunkSize] = useState(CHUNK_LINES);
   const [open, setOpen] = useState(false);
@@ -502,12 +503,12 @@ export const SpellAction = ({ text, onText }) => {
         تدقيق إملائي
       </Btn>
 
+      {/* ملء الشاشة بلا هوامش: المراجعة عملُ ساعات، وكل بكسلٍ يُقتطع من
+          الورق أو من قائمة التصحيحات يُبطئها. */}
       {open && (
-        <div className="fixed inset-0 bg-black/45 flex items-center justify-center z-50 p-4">
-          <div
-            dir="rtl"
-            className="bg-white rounded-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden"
-          >
+        <div className="fixed inset-0 bg-white z-50 flex" dir="rtl">
+          {/* ── اليمين ٤٠٪: التصحيحات ── */}
+          <div className="w-[40%] min-w-0 h-full flex flex-col border-l border-gray-200">
             <div className="flex items-center gap-3 p-4 border-b border-gray-100 flex-wrap">
               <div className="flex-1 min-w-0">
                 <h3 className="text-base font-bold text-gray-800">
@@ -642,6 +643,18 @@ export const SpellAction = ({ text, onText }) => {
                 <Check size={16} /> طبّق {chosen.length} تصحيحاً
               </button>
             </div>
+          </div>
+
+          {/* ── اليسار ٦٠٪: المقرَّر الأصلي، عارض المتصفّح دائماً ──
+              الحكم على تصحيحٍ إملائي مرجعه الورق نفسه لا النصّ الممسوح:
+              كلاهما قراءةٌ للنموذج، فمقارنتهما تدور في حلقة. */}
+          <div className="w-[60%] min-w-0 h-full">
+            <PdfPane
+              bytes={pdfBytes}
+              forceNative
+              onPickFile={onPdfBytes}
+              title="المقرَّر الأصلي — للمقارنة"
+            />
           </div>
         </div>
       )}

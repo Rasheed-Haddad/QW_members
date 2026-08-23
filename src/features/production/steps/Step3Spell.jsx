@@ -17,7 +17,7 @@ import {
   Brain,
 } from "lucide-react";
 import { usePipeline } from "../pipelineStore";
-import OriginalPane from "../components/OriginalPane";
+import PdfPane from "../components/PdfPane";
 import {
   buildChunks,
   screenCorrections,
@@ -44,8 +44,12 @@ const CHUNK_TIMEOUT_MS = 180000;
 const MAX_QUOTA_WAIT_S = 90;
 
 export default function Step3Spell() {
-  const { state, dispatch } = usePipeline();
-  const { lectures, markdown, original } = state;
+  const { state, dispatch, getLectureBytes, setLectureBytes } = usePipeline();
+  const { lectures, markdown } = state;
+
+  // ملفّ المحاضرة المقصوص في خطوة التقسيم — مرجع المقارنة في نافذة المراجعة.
+  // ويُعاد قراءته عند تغيّر المحاضرة المفتوحة أو عند رفع ملفٍّ يدوياً.
+  const [pdfTick, setPdfTick] = useState(0);
 
   const scanned = useMemo(
     () => lectures.filter((l) => markdown[l.id]),
@@ -462,8 +466,14 @@ export default function Step3Spell() {
         <ReviewModal
           name={lectures.find((l) => l.id === reviewing)?.name}
           text={markdown[reviewing]}
-          originalText={original?.[reviewing]}
           report={rep}
+          // pdfTick يُجبر إعادة القراءة بعد رفعٍ يدوي: البايتات في مخزن ref
+          // لا في الحالة، فلا تُحدِث تغيّراً يراه React من تلقائها.
+          pdfBytes={pdfTick >= 0 ? getLectureBytes(reviewing) : null}
+          onPdfBytes={(b) => {
+            setLectureBytes(reviewing, b);
+            setPdfTick((t) => t + 1);
+          }}
           onField={boundField}
           onApply={() => applyFor(reviewing)}
           onClose={() => setReviewing(null)}
@@ -599,15 +609,13 @@ const Row = memo(function Row({ c, text, onField, onFocusWord, muted }) {
 const ReviewModal = ({
   name,
   text,
-  originalText,
   report,
+  pdfBytes,
+  onPdfBytes,
   onField,
   onApply,
   onClose,
 }) => {
-  const [showOriginal, setShowOriginal] = useState(true);
-  // الكلمة التي تنظر إليها الآن — تُبرَز في الأصل تلقائياً
-  const [focusWord, setFocusWord] = useState("");
   const accepted = report.accepted || [];
   const rejected = report.rejected || [];
   const chosen = [...accepted, ...rejected].filter(
@@ -615,15 +623,12 @@ const ReviewModal = ({
   ).length;
 
   return (
-    <div
-      className="fixed inset-0 bg-black/45 flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
-      <div
-        dir="rtl"
-        className="bg-white rounded-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    // ملء الشاشة بلا هوامش: المراجعة عملُ ساعات، وكل بكسلٍ يُقتطع من الورق
+    // أو من قائمة التصحيحات يُبطئها. ولا إغلاق بنقرة الخلفية — نقرةٌ طائشة
+    // تُضيّع مراجعةً كاملة.
+    <div className="fixed inset-0 bg-white z-50 flex" dir="rtl">
+      {/* ── اليمين ٤٠٪: التصحيحات ── */}
+      <div className="w-[40%] min-w-0 h-full flex flex-col border-l border-gray-200">
         <div className="flex items-center gap-3 p-4 border-b border-gray-100">
           <div className="flex-1 min-w-0">
             <h3 className="text-base font-bold text-gray-800 truncate">
@@ -634,16 +639,6 @@ const ReviewModal = ({
             </p>
           </div>
           <button
-            onClick={() => setShowOriginal((v) => !v)}
-            className={`text-xs font-semibold rounded-lg px-3 py-2 border ${
-              showOriginal
-                ? "bg-brand text-white border-transparent"
-                : "bg-brand/10 text-brand border-brand/30"
-            }`}
-          >
-            الأصل
-          </button>
-          <button
             onClick={onClose}
             className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100"
           >
@@ -652,9 +647,7 @@ const ReviewModal = ({
         </div>
 
         <div className="flex-1 flex overflow-hidden">
-          <div
-            className={`${showOriginal ? "w-3/5" : "w-full"} overflow-y-auto`}
-          >
+          <div className="w-full overflow-y-auto">
             <div className="grid grid-cols-[auto_1fr_auto_1fr] gap-2.5 px-3 py-2 bg-gray-50 border-b border-gray-200 text-[11px] font-bold text-gray-500 sticky top-0">
               <span className="w-6" />
               <span>سابقاً</span>
@@ -673,16 +666,10 @@ const ReviewModal = ({
                 c={c}
                 text={text}
                 onField={onField}
-                onFocusWord={setFocusWord}
               />
             ))}
           </div>
 
-          {showOriginal && (
-            <div className="w-2/5 border-r border-gray-200 bg-gray-50">
-              <OriginalPane text={originalText} highlight={focusWord} />
-            </div>
-          )}
         </div>
 
         <div className="p-4 border-t border-gray-100 flex items-center gap-3">
@@ -700,6 +687,18 @@ const ReviewModal = ({
             <Check size={16} /> طبّق {chosen} تصحيحاً
           </button>
         </div>
+      </div>
+
+      {/* ── اليسار ٦٠٪: المقرَّر الأصلي، عارض المتصفّح دائماً ──
+          الحكم على تصحيحٍ إملائي مرجعه الورق نفسه لا النصّ الممسوح:
+          كلاهما قراءةٌ للنموذج، فمقارنتهما تدور في حلقة. */}
+      <div className="w-[60%] min-w-0 h-full">
+        <PdfPane
+          bytes={pdfBytes}
+          forceNative
+          onPickFile={onPdfBytes}
+          title="المقرَّر الأصلي — للمقارنة"
+        />
       </div>
     </div>
   );

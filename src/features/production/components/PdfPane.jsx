@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { FileText, Loader2, ZoomIn, ZoomOut, MonitorPlay, Layers } from "lucide-react";
+import {
+  FileText,
+  Loader2,
+  ZoomIn,
+  ZoomOut,
+  MonitorPlay,
+  Layers,
+  Upload,
+} from "lucide-react";
 import { openForView, renderPageToCanvas } from "../lib/pdfEngine";
 
 // ─── لوح المقرَّر الأصلي ──────────────────────────────────────────────────────
@@ -15,7 +23,18 @@ import { openForView, renderPageToCanvas } from "../lib/pdfEngine";
 
 const GAP = 12;
 
-export default function PdfPane({ bytes, title = "المقرَّر الأصلي" }) {
+/**
+ * `forceNative` — عارض المتصفّح دائماً بلا زرّ تحويل. تستعمله نافذةُ مراجعة
+ *   التدقيق: المطلوب هناك قراءة الورق للمقارنة، لا التكبير ولا شبكة الصفحات.
+ * `onPickFile` — حين لا ملفّ: يعرض زرّ رفعٍ في مكانه ويسلّم البايتات للأب،
+ *   فيظهر الملفّ فوراً بلا مغادرة النافذة.
+ */
+export default function PdfPane({
+  bytes,
+  title = "المقرَّر الأصلي",
+  forceNative = false,
+  onPickFile,
+}) {
   const [pdf, setPdf] = useState(null);
   const [error, setError] = useState(null);
   const [width, setWidth] = useState(700);
@@ -27,7 +46,7 @@ export default function PdfPane({ bytes, title = "المقرَّر الأصلي"
   // تالفاً أو الخطّ غير مُضمَّن خرجت الحروف مقطوشة، ولا يُصلحه إعداد.
   // عارض المتصفّح (Chrome/Electron) محرِّكٌ آخر أصلب في هذه الحالات، فنتيح
   // التحويل إليه بضغطة بدل أن يبقى المستخدم أمام نصٍّ لا يُقرأ.
-  const [native, setNative] = useState(false);
+  const [native, setNative] = useState(forceNative);
   const [blobUrl, setBlobUrl] = useState("");
 
   useEffect(() => {
@@ -82,12 +101,35 @@ export default function PdfPane({ bytes, title = "المقرَّر الأصلي"
 
   if (!bytes?.length) {
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-2 text-center p-6">
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-center p-6">
         <FileText size={30} className="text-gray-300" />
         <p className="text-sm text-gray-500 m-0">لا ملفّ أصليّ لهذه المحاضرة</p>
-        <p className="text-xs text-gray-400 m-0 leading-relaxed">
-          يظهر هنا حين تمرّ المحاضرة بخطوة التقسيم في هذه الجلسة
-        </p>
+        {onPickFile ? (
+          <>
+            <p className="text-xs text-gray-400 m-0 leading-relaxed max-w-xs">
+              ارفع ملفّ المحاضرة لتقارن التصحيحات بالورق نفسه — يُعرض فوراً
+              ولا يُرفَع إلى الخادم.
+            </p>
+            <label className="cursor-pointer text-sm font-bold text-white bg-brand rounded-xl px-5 py-2.5 flex items-center gap-2">
+              <Upload size={15} /> اختر ملفّ PDF
+              <input
+                type="file"
+                accept="application/pdf,.pdf"
+                className="hidden"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!f) return;
+                  onPickFile(new Uint8Array(await f.arrayBuffer()));
+                }}
+              />
+            </label>
+          </>
+        ) : (
+          <p className="text-xs text-gray-400 m-0 leading-relaxed">
+            يظهر هنا حين تمرّ المحاضرة بخطوة التقسيم في هذه الجلسة
+          </p>
+        )}
       </div>
     );
   }
@@ -102,6 +144,7 @@ export default function PdfPane({ bytes, title = "المقرَّر الأصلي"
             {pdf.numPages} صفحة
           </span>
         )}
+        {!forceNative && (
         <button
           onClick={() => setNative((v) => !v)}
           title={
@@ -118,6 +161,7 @@ export default function PdfPane({ bytes, title = "المقرَّر الأصلي"
           {native ? <Layers size={12} /> : <MonitorPlay size={12} />}
           {native ? "شبكة" : "عارض"}
         </button>
+        )}
         {!native && (
           <>
             <button
