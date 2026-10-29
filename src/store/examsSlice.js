@@ -312,10 +312,19 @@ const examsSlice = createSlice({
     names_loading: false,
     // المواد التي جُلبت كاملةً — الشاشات تتحقق منها قبل السماح بالحفظ
     full_loaded: {},
+    // الكلية التي تخصّها أسماء المواد في `exams` الآن — بها تعرف شاشة
+    // المواد أن ما في المخزن هو ما تريده فلا تطلبه ثانيةً
+    names_college_id: null,
+    // حال شاشة المواد تبقى هنا لا في المكوّن: الدخول إلى مساحة عمل مادة
+    // يفكّ الشاشة، والرجوع كان يعيدها إلى «اختر الجامعة» من أوّلها.
+    list_view: { universityId: null, collegeId: null, searchTerm: "", scrollY: 0 },
   },
   reducers: {
     clearError: (state) => {
       state.error = null;
+    },
+    set_list_view: (state, action) => {
+      state.list_view = { ...state.list_view, ...action.payload };
     },
     set_new_data_of_exam: (state, action) => {
       const examIndex = state.exams.findIndex(
@@ -356,9 +365,14 @@ const examsSlice = createSlice({
         // حتى لا يُفتح محرّر على سجلّ ناقص فيمحو ما لم يُرسَل.
         state.exams = action.payload.exams || [];
         state.full_loaded = {};
+        state.names_college_id =
+          action.meta.arg?.college_id != null
+            ? String(action.meta.arg.college_id)
+            : null;
       })
       .addCase(fetch_exam_names.rejected, (state, action) => {
         state.names_loading = false;
+        state.names_college_id = null;
         state.error = action.payload;
       })
 
@@ -409,6 +423,7 @@ const examsSlice = createSlice({
       })
       .addCase(fetch_exams.fulfilled, (state, action) => {
         state.exams = action.payload;
+        state.names_college_id = null; // كل المواد، لا كلية بعينها
         state.loading = false;
         state.error = null;
         // المسار القديم يجلب الوثائق كاملة — نعلّمها كذلك حتى لا يمنع
@@ -545,5 +560,6 @@ const examsSlice = createSlice({
   },
 });
 
-export const { clearError, set_new_data_of_exam } = examsSlice.actions;
+export const { clearError, set_new_data_of_exam, set_list_view } =
+  examsSlice.actions;
 export default examsSlice.reducer;

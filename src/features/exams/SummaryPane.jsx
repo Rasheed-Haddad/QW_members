@@ -62,7 +62,11 @@ export default function SummaryPane({ sections, onChange, title }) {
               // `singleLecture` يجعل اللصق يستبدل هذه المحاضرة بدل أن يُلحق
               // ثانيةً — والفكّ يقرأ الأولى وحدها فكانت الثانية تسقط صامتة.
               singleLecture
-              formData={{ summary: [{ meta: { lecture_title: title || "" }, sections: list }] }}
+              formData={{
+                summary: [
+                  { meta: { lecture_title: title || "" }, sections: list },
+                ],
+              }}
               handleChange={(name, val) => {
                 if (name !== "summary") return;
                 onChange(

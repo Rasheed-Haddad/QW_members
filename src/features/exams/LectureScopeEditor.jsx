@@ -121,7 +121,10 @@ const TextPart = ({
       </div>
     );
   }
-  const words = String(text || "").trim().split(/\s+/).filter(Boolean).length;
+  const words = String(text || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
   return (
     <div className="space-y-3">
       {/* الأدوات نفسها التي في خطّ الإنتاج — المواد القديمة تحتاجها
@@ -160,7 +163,15 @@ const TextPart = ({
 
 // ─── الأسئلة ──────────────────────────────────────────────────────────────────
 
-const QuestionCard = ({ q, n, onChange, onRemove, onMove, isFirst, isLast }) => (
+const QuestionCard = ({
+  q,
+  n,
+  onChange,
+  onRemove,
+  onMove,
+  isFirst,
+  isLast,
+}) => (
   <div className="p-4 rounded-xl border border-gray-200 bg-white">
     <div className="flex items-center gap-2 mb-3">
       <span className="text-base font-black text-[#f59e0b]">#{n}</span>
@@ -247,7 +258,9 @@ const QuestionsPart = ({ questions, onChange }) => {
     const terms = normAr(search).split(" ").filter(Boolean);
     if (!terms.length) return all;
     return all.filter(({ question: q }) => {
-      const hay = normAr(`${q.question || ""} ${(Array.isArray(q.options) ? q.options : []).join(" ")}`);
+      const hay = normAr(
+        `${q.question || ""} ${(Array.isArray(q.options) ? q.options : []).join(" ")}`,
+      );
       return terms.every((t) => hay.includes(t));
     });
   }, [questions, search]);
@@ -333,7 +346,9 @@ const QuestionsPart = ({ questions, onChange }) => {
         />
       ) : visible.length === 0 ? (
         <div className="p-8 text-center rounded-xl border border-dashed border-gray-300 bg-white">
-          <p className="text-sm text-gray-600">لا سؤال يطابق «{search.trim()}»</p>
+          <p className="text-sm text-gray-600">
+            لا سؤال يطابق «{search.trim()}»
+          </p>
           <button
             onClick={() => setSearch("")}
             className="mt-2 text-xs font-semibold text-amber-600 hover:underline"
@@ -365,7 +380,11 @@ const FlashPart = ({ cards, onChange, lectureId, sourceText }) => {
   const add = () =>
     onChange([
       ...cards,
-      { card_id: `${lectureId}_c${cards.length + 1}_${cards.length}`, front: "", back: "" },
+      {
+        card_id: `${lectureId}_c${cards.length + 1}_${cards.length}`,
+        front: "",
+        back: "",
+      },
     ]);
 
   const fromAi = (items) =>
@@ -414,7 +433,9 @@ const FlashPart = ({ cards, onChange, lectureId, sourceText }) => {
       {cards.map((c, i) => (
         <div key={i} className="p-4 rounded-xl border border-gray-200 bg-white">
           <div className="flex items-center gap-2 mb-3">
-            <span className="text-sm font-black text-emerald-600">#{i + 1}</span>
+            <span className="text-sm font-black text-emerald-600">
+              #{i + 1}
+            </span>
             <button
               onClick={() => onChange(cards.filter((_, j) => j !== i))}
               className="mr-auto p-1.5 rounded-md text-red-500 hover:bg-red-50"
@@ -434,7 +455,7 @@ const FlashPart = ({ cards, onChange, lectureId, sourceText }) => {
                 }}
                 rows={3}
                 dir="rtl"
-                className="w-full p-2.5 rounded-lg border border-gray-300 bg-gray-50 text-sm outline-none focus:border-emerald-400"
+                className="w-full p-2.5 rounded-lg border border-gray-300 bg-gray-50 text-xl outline-none focus:border-emerald-400"
               />
             </Field>
             <Field label="الظهر" hint="إجابة قصيرة ودقيقة">
@@ -465,7 +486,11 @@ const WrittenPart = ({ written, onChange, lectureId, sourceText }) => {
   const add = () =>
     setQs([
       ...qs,
-      { q_id: `${lectureId}_w${qs.length + 1}_${qs.length}`, question: "", model_answer: "" },
+      {
+        q_id: `${lectureId}_w${qs.length + 1}_${qs.length}`,
+        question: "",
+        model_answer: "",
+      },
     ]);
 
   const fromAi = (items) =>
@@ -516,7 +541,10 @@ const WrittenPart = ({ written, onChange, lectureId, sourceText }) => {
         />
       ) : (
         qs.map((q, i) => (
-          <div key={i} className="p-4 rounded-xl border border-gray-200 bg-white">
+          <div
+            key={i}
+            className="p-4 rounded-xl border border-gray-200 bg-white"
+          >
             <div className="flex items-center gap-2 mb-3">
               <span className="text-sm font-black text-red-600">#{i + 1}</span>
               <button
@@ -650,9 +678,14 @@ const LectureScopeEditor = ({
         });
         const next = {
           summary: data.summary ?? null,
-          questions: (Array.isArray(data.questions) ? data.questions : []).map((x) => x.question),
+          questions: (Array.isArray(data.questions) ? data.questions : []).map(
+            (x) => x.question,
+          ),
           flash_cards: data.flash_cards || [],
-          written_exam: data.written_exam || { duration_min: 30, questions: [] },
+          written_exam: data.written_exam || {
+            duration_min: 30,
+            questions: [],
+          },
         };
         setDraft((d) => ({ ...d, ...next }));
 
@@ -816,13 +849,13 @@ const LectureScopeEditor = ({
       <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200">
         <div className="px-4 py-3 flex items-center gap-3">
           {!embedded && (
-          <button
-            onClick={goBack}
-            className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
-            title="رجوع"
-          >
-            <ArrowRight size={18} />
-          </button>
+            <button
+              onClick={goBack}
+              className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
+              title="رجوع"
+            >
+              <ArrowRight size={18} />
+            </button>
           )}
           <div className="flex-1 min-w-0">
             <h1 className="text-base font-bold text-gray-900 truncate">

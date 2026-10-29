@@ -15,12 +15,14 @@ import {
   AlertTriangle,
   Undo2,
   AudioLines,
-  Brain,} from "lucide-react";
+  Brain,
+} from "lucide-react";
 import { scanLecture, checkR2 } from "../lib/mistralOcr";
 import { transcribeAudio } from "../lib/transcribe";
 import { chunkLines } from "../lib/promptSettings";
 import { bytesOfFile } from "../lib/pdfEngine";
 import PdfPane from "./PdfPane";
+import { ToolBtn } from "./ToolBtn";
 import {
   buildChunks,
   CHUNK_LINES,
@@ -28,10 +30,7 @@ import {
   applyCorrections,
 } from "../lib/spellGuards";
 import { API_BASE_URL, PASSWORD } from "../../../config";
-import {
-  learnedForPrompt,
-  recordAccepted,
-} from "../lib/learnedCorrections";
+import { learnedForPrompt, recordAccepted } from "../lib/learnedCorrections";
 
 // ─── أدوات الذكاء الاصطناعي، قابلة للاستعمال خارج خطّ الإنتاج ─────────────────
 // المواد القديمة (بلا خطة «معدل») تحتاج نفس الأدوات لكن محاضرةً محاضرة، لا
@@ -45,24 +44,26 @@ const CHUNK_TIMEOUT_MS = 180000; // ثلاث دقائق تكفي أطول دفع
 // سقف انتظار الحصّة: retryAfter قد يعود بآلاف الثواني، وانتظارها صامتاً
 // يبدو تعليقاً. ما تجاوز السقف يُبلَّغ خطأً ليقرّر المحرِّر.
 const MAX_QUOTA_WAIT_S = 90;
+// بين محاولات الدفعة الفاشلة نفسها — تُعاد حتى تنجح ولا يُلغى التدقيق
+const RETRY_WAIT_S = 6;
+
+// النموذج الذي تبدأ به نافذتا التدقيق والتوليد (البطاقات والتحريري) — الأكثر
+// استعمالاً، فلا يُختار يدوياً كل مرة. يبقى قابلاً للتغيير من القائمة، ويُضاف
+// إليها إن لم تُرجعه قائمة الحساب كي لا يظهر المحدِّد فارغاً.
+export const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
+const withDefault = (list) =>
+  list.includes(DEFAULT_GEMINI_MODEL) ? list : [DEFAULT_GEMINI_MODEL, ...list];
 
 // قائمة احتياطية حين يتعذّر جلبها من الحساب
-const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-2.0-flash"];
+const FALLBACK_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-pro",
+  "gemini-2.0-flash",
+];
 
-const Btn = ({ icon: Icon, color, children, busy, ...rest }) => (
-  <button
-    {...rest}
-    className="text-xs font-semibold rounded-lg px-3 py-2 flex items-center gap-1.5 disabled:opacity-40 border"
-    style={{
-      color,
-      backgroundColor: `${color}14`,
-      borderColor: `${color}33`,
-    }}
-  >
-    {busy ? <Loader2 size={13} className="animate-spin" /> : <Icon size={13} />}
-    {children}
-  </button>
-);
+// زرّ الأداة موحَّد الشكل مع بقية الشريط (ToolBtn)
+const Btn = ToolBtn;
 
 // ─── ١) المسح الضوئي: ملف PDF ← ماركداون ──────────────────────────────────────
 
@@ -117,7 +118,7 @@ export const OcrAction = ({ lectureName, subjectName, onText, onFile }) => {
   return (
     <>
       <Btn icon={ScanLine} color="#0ea5e9" onClick={() => setOpen(true)}>
-        مسح ضوئي من PDF
+        مسح ضوئي
       </Btn>
 
       {open && (
@@ -296,7 +297,9 @@ const SpellRow = memo(function SpellRow({ c, text, onField, muted }) {
           {idx >= 0 ? (
             <>
               {before}
-              <mark className="bg-amber-200 rounded px-1 font-bold">{c.before}</mark>
+              <mark className="bg-amber-200 rounded px-1 font-bold">
+                {c.before}
+              </mark>
               {after}
             </>
           ) : (
@@ -336,8 +339,19 @@ const SpellRow = memo(function SpellRow({ c, text, onField, muted }) {
   );
 });
 
-
-export const SpellAction = ({ text, onText, pdfBytes, onPdfBytes }) => {
+// autoRunKey/hideTrigger/onReady/onFinish: للتشغيل من «معالجة كل المحاضرات»
+// — يبدأ التدقيق وحده بالنموذج الافتراضي، ويُبلغ حين تجهز التصحيحات
+// (onReady) وحين تُطبَّق أو تُغلَق النافذة بلا تطبيق (onFinish(applied)).
+export const SpellAction = ({
+  text,
+  onText,
+  pdfBytes,
+  onPdfBytes,
+  autoRunKey = null,
+  hideTrigger = false,
+  onReady,
+  onFinish,
+}) => {
   // حجم الدفعة كما ضبطه المحرِّر — للعرض وحده، والتقسيم يقرأه عند التشغيل
   const [chunkSize, setChunkSize] = useState(CHUNK_LINES);
   const [open, setOpen] = useState(false);
@@ -354,12 +368,12 @@ export const SpellAction = ({ text, onText, pdfBytes, onPdfBytes }) => {
     axios
       .post(`${API_BASE_URL}/production/gemini-models`, { PASSWORD })
       .then((r) => {
-        setModels(r.data?.models || []);
-        setModel(r.data?.current || "");
+        setModels(withDefault(r.data?.models || []));
+        setModel(DEFAULT_GEMINI_MODEL);
       })
       .catch(() => {
-        setModels(FALLBACK_MODELS);
-        setModel(FALLBACK_MODELS[0]);
+        setModels(withDefault(FALLBACK_MODELS));
+        setModel(DEFAULT_GEMINI_MODEL);
       });
   }, []);
 
@@ -387,57 +401,79 @@ export const SpellAction = ({ text, onText, pdfBytes, onPdfBytes }) => {
     cancelRef.current = false;
     const chunks = buildChunks(text, await chunkLines());
     const raw = [];
-    let quotaRetries = 0;
+    // ── الدفعة الفاشلة لا تُلغي ما قبلها ──
+    // كان أيّ خطأ (مهلة، شبكة، 5xx، حصّة) يرمي فيضيع كل ما دُقِّق: تدقيقٌ من
+    // ثلاثين دفعة يفشل في السادسة والعشرين فيُعاد من أوّله ويُدفع ثمنه مرتين.
+    // الآن الدفعة نفسها تُعاد كل RETRY_WAIT_S ثانية حتى تنجح، والإلغاء وحده
+    // يوقفها — وحتى الإلغاء يُبقي ما سبق قابلاً للمراجعة.
+    let stoppedAt = null; // رقم الدفعة التي أُلغي عندها (إن أُلغي)
     try {
       for (let i = 0; i < chunks.length; i++) {
-        if (cancelRef.current) throw new Error("أُلغي التدقيق");
+        if (cancelRef.current) {
+          stoppedAt = i;
+          break;
+        }
         setProgress({ done: i, total: chunks.length });
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          const r = await axios.post(
-            `${API_BASE_URL}/production/spellcheck`,
-            {
-              PASSWORD,
-              text: chunks[i].text,
-              model,
-              learned: learnedForPrompt(),
-            },
-            { timeout: CHUNK_TIMEOUT_MS },
-          );
-          raw.push(...(r.data?.corrections || []));
-        } catch (e) {
-          // انتهاء المهلة يُقال صراحةً: «تعذّر الاتصال» وحدها لا تدلّ على شيء
-          if (e?.code === "ECONNABORTED") {
-            throw new Error(
-              `الدفعة ${i + 1} تجاوزت ${CHUNK_TIMEOUT_MS / 1000} ثانية بلا ردّ — جرّب نموذجاً أسرع أو صغّر حجم الدفعة من الإعدادات`,
+        let attempt = 0;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const r = await axios.post(
+              `${API_BASE_URL}/production/spellcheck`,
+              {
+                PASSWORD,
+                text: chunks[i].text,
+                model,
+                learned: learnedForPrompt(),
+              },
+              { timeout: CHUNK_TIMEOUT_MS },
             );
-          }
-          const wait = Number(e?.response?.data?.retryAfter) || 0;
-          if (wait && wait <= MAX_QUOTA_WAIT_S && quotaRetries < 3) {
-            quotaRetries += 1;
+            raw.push(...(r.data?.corrections || []));
+            break;
+          } catch (e) {
+            attempt += 1;
+            const reason =
+              e?.code === "ECONNABORTED"
+                ? `تجاوزت ${CHUNK_TIMEOUT_MS / 1000} ثانية بلا ردّ`
+                : e?.response?.data?.message ||
+                  (e?.response ? `خطأ ${e.response.status}` : "تعذّر الاتصال");
+            // مهلة الحصّة إن طلبها الخادم وكانت معقولة، وإلا ست ثوانٍ
+            const asked = Number(e?.response?.data?.retryAfter) || 0;
+            const wait =
+              asked > RETRY_WAIT_S && asked <= MAX_QUOTA_WAIT_S ? asked : RETRY_WAIT_S;
             // عدٌّ تنازليّ مرئي: الانتظار الصامت لا يُفرَّق عن التعليق
             for (let s = wait; s > 0; s--) {
-              if (cancelRef.current) throw new Error("أُلغي التدقيق");
-              setProgress({ done: i, total: chunks.length, waiting: s });
+              if (cancelRef.current) break;
+              setProgress({
+                done: i,
+                total: chunks.length,
+                retry: { attempt, reason, seconds: s },
+              });
               // eslint-disable-next-line no-await-in-loop
               await new Promise((r2) => setTimeout(r2, 1000));
             }
-            i -= 1;
-            // eslint-disable-next-line no-continue
-            continue;
+            if (cancelRef.current) break;
+            setProgress({ done: i, total: chunks.length });
           }
-          if (wait > MAX_QUOTA_WAIT_S) {
-            throw new Error(
-              `الحصّة مستنفدة ويطلب الانتظار ${wait} ثانية — جرّب نموذجاً آخر أو عد لاحقاً`,
-            );
-          }
-          throw e;
+        }
+        if (cancelRef.current) {
+          stoppedAt = i;
+          break;
         }
         if (i < chunks.length - 1) {
-          if (cancelRef.current) throw new Error("أُلغي التدقيق");
           // eslint-disable-next-line no-await-in-loop
           await new Promise((r2) => setTimeout(r2, WAIT_BETWEEN_CHUNKS));
         }
+      }
+      // أُلغي قبل أن يعود شيء: لا تقرير يُراجَع
+      if (stoppedAt !== null && raw.length === 0) {
+        throw new Error(`أُلغي التدقيق عند الدفعة ${stoppedAt + 1} من ${chunks.length}`);
+      }
+      if (stoppedAt !== null) {
+        setError(
+          `أُلغي عند الدفعة ${stoppedAt + 1} من ${chunks.length} — المعروض تصحيحات الدفعات المكتملة وحدها`,
+        );
       }
       const { accepted, rejected } = screenCorrections(raw, text);
       setReport({
@@ -489,19 +525,41 @@ export const SpellAction = ({ text, onText, pdfBytes, onPdfBytes }) => {
     onText(r.text, r);
     setOpen(false);
     setReport(null);
+    onFinish?.(true);
   };
+
+  const closeNoApply = () => {
+    if (busy) return;
+    setOpen(false);
+    onFinish?.(false);
+  };
+
+  // التشغيل الآلي: يبدأ فور توفّر النموذج، مرةً واحدة لكل مفتاح
+  const autoRanRef = useRef(null);
+  useEffect(() => {
+    if (!autoRunKey || !model || autoRanRef.current === autoRunKey) return;
+    autoRanRef.current = autoRunKey;
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunKey, model]);
+  useEffect(() => {
+    if (report && autoRunKey) onReady?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [report]);
 
   return (
     <>
-      <Btn
-        icon={SpellCheck2}
-        color="#8C52FF"
-        onClick={openPicker}
-        disabled={!text?.trim()}
-        title={text?.trim() ? "" : "لا نصّ لتدقيقه"}
-      >
-        تدقيق إملائي
-      </Btn>
+      {!hideTrigger && (
+        <Btn
+          icon={SpellCheck2}
+          color="#8C52FF"
+          onClick={openPicker}
+          disabled={!text?.trim()}
+          title={text?.trim() ? "" : "لا نصّ لتدقيقه"}
+        >
+          تدقيق إملائي
+        </Btn>
+      )}
 
       {/* ملء الشاشة بلا هوامش: المراجعة عملُ ساعات، وكل بكسلٍ يُقتطع من
           الورق أو من قائمة التصحيحات يُبطئها. */}
@@ -526,7 +584,7 @@ export const SpellAction = ({ text, onText, pdfBytes, onPdfBytes }) => {
                 </span>
               )}
               <button
-                onClick={() => !busy && setOpen(false)}
+                onClick={closeNoApply}
                 className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100"
               >
                 <X size={18} />
@@ -573,12 +631,20 @@ export const SpellAction = ({ text, onText, pdfBytes, onPdfBytes }) => {
 
               {busy && (
                 <div className="py-12 text-center">
-                  <Loader2 size={26} className="animate-spin mx-auto text-brand" />
+                  <Loader2
+                    size={26}
+                    className="animate-spin mx-auto text-brand"
+                  />
                   <p className="text-sm text-gray-500 mt-3">
-                    {progress?.waiting
-                      ? `تجاوز الحصة — انتظار ${progress.waiting} ثانية`
-                      : `دفعة ${(progress?.done ?? 0) + 1} من ${progress?.total ?? "?"}`}
+                    دفعة {(progress?.done ?? 0) + 1} من {progress?.total ?? "?"}
                   </p>
+                  {progress?.retry && (
+                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg mx-auto mt-2 px-3 py-2 max-w-sm">
+                      فشلت هذه الدفعة ({progress.retry.reason}) — محاولة{" "}
+                      {progress.retry.attempt + 1} بعد {progress.retry.seconds} ث.
+                      ما دُقِّق قبلها محفوظ.
+                    </p>
+                  )}
                   {progress?.total > 0 && (
                     <div className="mx-auto mt-3 h-1.5 w-64 rounded-full bg-gray-100 overflow-hidden">
                       <div
@@ -595,7 +661,7 @@ export const SpellAction = ({ text, onText, pdfBytes, onPdfBytes }) => {
                     }}
                     className="mt-4 text-xs font-semibold text-red-600 border border-red-200 rounded-lg px-4 py-2"
                   >
-                    ألغِ التدقيق
+                    أوقف وراجع ما اكتمل
                   </button>
                 </div>
               )}
@@ -621,7 +687,12 @@ export const SpellAction = ({ text, onText, pdfBytes, onPdfBytes }) => {
                     </p>
                   )}
                   {report.accepted.map((c) => (
-                    <SpellRow key={c.key} c={c} text={text} onField={setField} />
+                    <SpellRow
+                      key={c.key}
+                      c={c}
+                      text={text}
+                      onField={setField}
+                    />
                   ))}
                 </>
               )}
@@ -629,7 +700,7 @@ export const SpellAction = ({ text, onText, pdfBytes, onPdfBytes }) => {
 
             <div className="p-4 border-t border-gray-100 flex items-center gap-3">
               <button
-                onClick={() => setOpen(false)}
+                onClick={closeNoApply}
                 disabled={busy}
                 className="text-sm text-gray-600 border border-gray-200 rounded-xl px-4 py-2.5 flex items-center gap-2 disabled:opacity-40"
               >
@@ -672,20 +743,24 @@ export const GenerateAction = ({ kind, text, onItems }) => {
   const [error, setError] = useState(null);
   const [models, setModels] = useState([]);
   const [model, setModel] = useState("");
-  const [focus, setFocus] = useState("");
-  const [count, setCount] = useState(isFlash ? 10 : 5);
+  const [focus, setFocus] = useState(
+    isFlash
+      ? "قلل الأرقام والنسب وركز على المعلومات المهمة"
+      : "تعداد, شرح, مقارنة",
+  );
+  const [count, setCount] = useState(isFlash ? 35 : 12);
 
   useEffect(() => {
     if (!open || models.length) return;
     axios
       .post(`${API_BASE_URL}/production/gemini-models`, { PASSWORD })
       .then((r) => {
-        setModels(r.data?.models || []);
-        setModel(r.data?.current || "");
+        setModels(withDefault(r.data?.models || []));
+        setModel(DEFAULT_GEMINI_MODEL);
       })
       .catch(() => {
-        setModels(FALLBACK_MODELS);
-        setModel(FALLBACK_MODELS[0]);
+        setModels(withDefault(FALLBACK_MODELS));
+        setModel(DEFAULT_GEMINI_MODEL);
       });
   }, [open, models.length]);
 
@@ -771,7 +846,11 @@ export const GenerateAction = ({ kind, text, onItems }) => {
                     className="px-3 py-2 rounded-xl border border-gray-200 text-sm bg-white text-gray-800"
                   >
                     {models.map((m) => (
-                      <option key={m} value={m} className="bg-white text-gray-800">
+                      <option
+                        key={m}
+                        value={m}
+                        className="bg-white text-gray-800"
+                      >
                         {m}
                       </option>
                     ))}
@@ -781,7 +860,7 @@ export const GenerateAction = ({ kind, text, onItems }) => {
               <label className="flex flex-col gap-1 w-24">
                 <span className="text-xs text-gray-400">العدد</span>
                 <input
-                  type="number"
+                  type="text"
                   min={1}
                   max={50}
                   value={count}
@@ -835,7 +914,6 @@ export const GenerateAction = ({ kind, text, onItems }) => {
   );
 };
 
-
 // ─── ٤) تفريغ تسجيل صوتي إلى نصّ مقرَّر ─────────────────────────────────────────
 // المحاضرة قد تكون تسجيلاً لا ملفاً. الناتج يصير **نصّ المقرَّر** نفسه، فيمرّ
 // على ما يمرّ عليه سواه: التدقيق الإملائي وتوليد البطاقات والتحريري.
@@ -858,13 +936,12 @@ export const TranscribeAction = ({ onText }) => {
     axios
       .post(`${API_BASE_URL}/production/transcribe-models`, { PASSWORD })
       .then((r) => {
-        const list = r.data?.models || [];
-        setModels(list);
-        setModel(r.data?.current || list[0] || "");
+        setModels(withDefault(r.data?.models || []));
+        setModel(DEFAULT_GEMINI_MODEL);
       })
       .catch(() => {
-        setModels(FALLBACK_MODELS);
-        setModel(FALLBACK_MODELS[0]);
+        setModels(withDefault(FALLBACK_MODELS));
+        setModel(DEFAULT_GEMINI_MODEL);
       });
   }, [open, models.length]);
 
@@ -900,7 +977,7 @@ export const TranscribeAction = ({ onText }) => {
   return (
     <>
       <Btn icon={AudioLines} color="#a855f7" onClick={() => setOpen(true)}>
-        تفريغ تسجيل صوتي
+        تفريغ صوتي
       </Btn>
 
       {open && (
@@ -922,7 +999,7 @@ export const TranscribeAction = ({ onText }) => {
                   تفريغ تسجيل صوتي
                 </h3>
                 <p className="text-xs text-gray-400">
-                  الناتج يصير نصّ المقرَّر — أي صيغة صوتية
+                  يُضاف الناتج بعد نهاية نصّ المقرَّر الحالي — أي صيغة صوتية
                 </p>
               </div>
               <button

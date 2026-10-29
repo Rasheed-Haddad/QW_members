@@ -32,11 +32,44 @@ export const employer_login = createAsyncThunk(
   },
 );
 
-// ملاحظة: لا نخزّن الجلسة في localStorage عمداً — يُطلب تسجيل الدخول كل مرة.
+// ─── بقاء الجلسة ──────────────────────────────────────────────────────────────
+// كانت الجلسة في الذاكرة وحدها، فكل تحديثٍ للصفحة يعيد شاشة الدخول — وهو
+// عبثٌ يوميّ لعضوٍ يعمل ساعات، ويزداد سوءاً على الموبايل حيث يُعاد تحميل
+// التبويب من تلقائه حين ينقص الذاكرة.
+//
+// المحفوظ **هوية العضو لا كلماته**: `_id` والاسم والهاتف. وهذا لا يمنح
+// صلاحيةً بذاته — الخادم يتحقّق في كل طلب أن المادة مُسلَّمة لهذا العضو
+// (`allowSubject`)، فالمخزَّن مفتاحُ تعريفٍ لا مفتاحُ مرور.
+const STORE = "employer_session_v1";
+
+const loadSession = () => {
+  try {
+    const raw = localStorage.getItem(STORE);
+    if (!raw) return null;
+    const e = JSON.parse(raw);
+    // نقبل ما يحمل معرّفاً فقط: نصفُ كائنٍ محفوظ يُنتج طلباتٍ بلا هوية
+    return e && e._id ? e : null;
+  } catch {
+    return null;
+  }
+};
+
+const saveSession = (employer) => {
+  try {
+    if (employer && employer._id) {
+      localStorage.setItem(STORE, JSON.stringify(employer));
+    } else {
+      localStorage.removeItem(STORE);
+    }
+  } catch {
+    // امتلاء المخزن أو حظره لا يمنع العمل — تبقى الجلسة في الذاكرة
+  }
+};
+
 const authSlice = createSlice({
   name: "auth",
   initialState: {
-    employer: null, // { _id, name, phone_number }
+    employer: loadSession(), // { _id, name, phone_number }
     loading: false,
     error: null,
   },
@@ -44,6 +77,7 @@ const authSlice = createSlice({
     logout: (state) => {
       state.employer = null;
       state.error = null;
+      saveSession(null);
     },
     clearAuthError: (state) => {
       state.error = null;
@@ -58,6 +92,7 @@ const authSlice = createSlice({
       .addCase(employer_login.fulfilled, (state, action) => {
         state.loading = false;
         state.employer = action.payload;
+        saveSession(action.payload);
         state.error = null;
       })
       .addCase(employer_login.rejected, (state, action) => {

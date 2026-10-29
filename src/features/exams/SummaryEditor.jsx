@@ -174,7 +174,7 @@ const JsonPasteModal = memo(({ onClose, onApply, replaces = false }) => {
 
 // ─── SectionCard — single section editor with its own JSON state ──────────────
 const SectionCard = memo(
-  ({ section, sectionIndex, totalSections, onChange }) => {
+  ({ section, sectionIndex, totalSections, onChange, onDelete }) => {
     const [sectionJson, setSectionJson] = useState(() =>
       JSON.stringify(section, null, 2),
     );
@@ -217,10 +217,12 @@ const SectionCard = memo(
         className="rounded-2xl overflow-hidden transition-all"
         style={{ border: `2px solid ${sectionError ? C + "66" : "#e0d9ff"}` }}
       >
-        {/* Section header */}
-        <button
+        {/* Section header — div لا button: بداخله زرّ الحذف، والزرّ لا يُحتضن في زرّ */}
+        <div
+          role="button"
+          tabIndex={0}
           onClick={() => setOpen((v) => !v)}
-          className="w-full flex items-center gap-3 px-4 py-3 text-right transition-colors"
+          className="w-full flex items-center gap-3 px-4 py-3 text-right transition-colors cursor-pointer"
           style={{
             background: sectionError
               ? `linear-gradient(120deg, ${C}12 0%, ${C}04 100%)`
@@ -258,13 +260,25 @@ const SectionCard = memo(
               </span>
             )}
             {sectionError && <AlertTriangle size={14} style={{ color: C }} />}
+            {onDelete && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete();
+                }}
+                title="حذف هذا القسم"
+                className="p-1.5 rounded-lg hover:bg-red-50"
+              >
+                <Trash2 size={14} color={C} />
+              </button>
+            )}
             {open ? (
               <ChevronDown size={15} color={sectionError ? C : V} />
             ) : (
               <ChevronRight size={15} color={sectionError ? C : V} />
             )}
           </div>
-        </button>
+        </div>
 
         {/* JSON editor for this section */}
         {open && (
@@ -345,6 +359,30 @@ const LectureCard = memo(({ lecture, index, onChange, onDelete }) => {
       } catch {
         setHasError(true);
       }
+    },
+    [lecture, sections, onChange],
+  );
+
+  // حذف قسمٍ واحد. التطبيق (EXAMS/frontend) يعرّف القسم بـ`id`: عليه تُحفظ
+  // ملاحظات الطلاب وتُربط الشكاوى، فمعرّفات الباقي **لا تُمسّ**. أما `number`
+  // فيُعرض للطالب رقماً للقسم، فيُعاد تسلسله 1..n كي لا تظهر فجوة.
+  const handleSectionDelete = useCallback(
+    (sIdx) => {
+      const sec = sections[sIdx];
+      const name = sec?.title || sec?.section_title || sec?.name || `قسم ${sIdx + 1}`;
+      const notes = (sec?.notes || []).filter((n) => String(n?.note || "").trim()).length;
+      if (
+        !window.confirm(
+          `حذف القسم ${sIdx + 1}: «${name}»؟` +
+            (notes ? `\nستُحذف معه ${notes} ملاحظة طلاب مكتوبة عليه.` : ""),
+        )
+      ) {
+        return;
+      }
+      const newSections = sections
+        .filter((_, j) => j !== sIdx)
+        .map((s, j) => ({ ...s, number: j + 1 }));
+      onChange({ ...lecture, sections: newSections });
     },
     [lecture, sections, onChange],
   );
@@ -466,11 +504,14 @@ const LectureCard = memo(({ lecture, index, onChange, onDelete }) => {
               <div className="space-y-2">
                 {sections.map((sec, sIdx) => (
                   <SectionCard
-                    key={sIdx}
+                    // المفتاح يجمع الموضع والمعرّف: بعد الحذف تُعاد تهيئة ما
+                    // بعده من بطاقات فلا يرث قسمٌ حالةَ (فتح/نصّ JSON) الذي حُذف
+                    key={`${sIdx}:${sec?.id ?? ""}`}
                     section={sec}
                     sectionIndex={sIdx}
                     totalSections={sectionCount}
                     onChange={(updated) => handleSectionChange(sIdx, updated)}
+                    onDelete={() => handleSectionDelete(sIdx)}
                   />
                 ))}
               </div>

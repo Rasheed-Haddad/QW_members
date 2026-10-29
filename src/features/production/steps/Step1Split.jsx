@@ -40,6 +40,7 @@ import {
 import { compressPdf, LEVELS, fmtMB } from "../lib/pdfCompress";
 import { usePipeline } from "../pipelineStore";
 import PageGrid from "../components/PageGrid";
+import PdfPane, { canInlinePdf } from "../components/PdfPane";
 import CoverageBar from "../components/CoverageBar";
 import RangeList from "../components/RangeList";
 import SplitNameModal from "../components/SplitNameModal";
@@ -812,7 +813,8 @@ export default function Step1Split() {
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-100">
               <FileText size={15} className="text-brand" />
               <span className="text-sm font-bold text-gray-800 flex-1">
-                المقرَّر الأصلي — عارض المتصفّح
+                المقرَّر الأصلي —{" "}
+                {canInlinePdf ? "عارض المتصفّح" : "رسم الصفحات"}
               </span>
               <button
                 onClick={() => {
@@ -824,11 +826,20 @@ export default function Step1Split() {
                 <X size={16} />
               </button>
             </div>
-            <iframe
-              src={previewUrl}
-              title="المقرَّر الأصلي"
-              className="flex-1 w-full border-0"
-            />
+            {/* متصفّحات الموبايل لا تعرض PDF داخل إطار: تُظهر صفحةً سوداء
+                فيها معرّف الـblob وزرّ «فتح» عاطل. فنرسم الصفحات بـpdf.js
+                بدلاً منه — بكسلاتٌ تعمل في كل متصفّح. */}
+            {canInlinePdf ? (
+              <iframe
+                src={previewUrl}
+                title="المقرَّر الأصلي"
+                className="flex-1 w-full border-0"
+              />
+            ) : (
+              <div className="flex-1 overflow-hidden">
+                <PdfPane bytes={getMerged()} title="المقرَّر الأصلي" />
+              </div>
+            )}
           </div>
         </div>
       )}

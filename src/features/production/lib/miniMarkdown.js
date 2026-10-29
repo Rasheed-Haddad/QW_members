@@ -5,6 +5,55 @@
 //
 // القاعدة الحاكمة: نهرّب HTML أولاً، ثم نبني الوسوم التي نعرفها وحدها.
 // فلا يمكن لنصٍّ في المقرَّر أن يُنفّذ شيئاً مهما بدا.
+//
+// ── المعادلات (LaTeX) ──
+// المسح الضوئي يُخرج المعادلات بصيغة LaTeX ($…$ و$$…$$ و\(…\) و\[…\]).
+// نرسمها بـKaTeX: يُهرّب مدخله بنفسه، و`trust: false` يمنع \href وأمثاله،
+// فمخرَجه آمن كبقية ما نبنيه. تُستخرج المعادلات قبل أي معالجة وتُستبدل
+// بعلامات، ثم تعود مرسومةً في النهاية — كي لا يعبث بها تحويل * و_ و`.
+
+import katex from "katex";
+import "katex/dist/katex.min.css";
+
+const MARK = "⁣"; // فاصلٌ غير مرئي لا يمسّه التهريب ولا الماركداون
+const MATH_TOKEN = new RegExp(`${MARK}M(\\d+)${MARK}`, "g");
+
+const renderMath = (tex, display) => {
+  try {
+    return katex.renderToString(tex, {
+      displayMode: display,
+      throwOnError: false,
+      trust: false,
+      strict: "ignore",
+      output: "html",
+    });
+  } catch {
+    return `<code>${escapeHtml(tex)}</code>`;
+  }
+};
+
+/** يستبدل المعادلات بعلامات ويعيد قائمتها مرسومة */
+const extractMath = (md) => {
+  const out = [];
+  const keep = (html) => {
+    out.push(html);
+    return `${MARK}M${out.length - 1}${MARK}`;
+  };
+  let s = String(md || "");
+  // المعروضة أولاً (قد تمتدّ على عدّة أسطر)، ثم المضمَّنة في السطر
+  s = s.replace(/\$\$([\s\S]+?)\$\$/g, (m, tex) => keep(renderMath(tex.trim(), true)));
+  s = s.replace(/\\\[([\s\S]+?)\\\]/g, (m, tex) => keep(renderMath(tex.trim(), true)));
+  s = s.replace(/\\\(([^\n]+?)\\\)/g, (m, tex) => keep(renderMath(tex.trim(), false)));
+  // $…$: لا مسافة بعد الأولى ولا قبل الثانية، ولا \$ مهرَّبة — كي لا يُقرأ
+  // رمز عملةٍ عابر معادلةً
+  s = s.replace(/(^|[^\\$])\$(?!\s)([^$\n]+?)(?<![\s\\])\$(?!\d)/g, (m, pre, tex) =>
+    pre + keep(renderMath(tex, false)),
+  );
+  return { text: s, math: out };
+};
+
+const restoreMath = (html, math) =>
+  math.length ? html.replace(MATH_TOKEN, (m, i) => math[Number(i)] ?? "") : html;
 
 const escapeHtml = (s) =>
   String(s == null ? "" : s)
@@ -56,6 +105,11 @@ const cells = (l) =>
 
 /** يحوّل ماركداون إلى HTML آمن. */
 export const renderMarkdown = (md) => {
+  const { text: withTokens, math } = extractMath(md);
+  return restoreMath(renderBlocks(withTokens), math);
+};
+
+const renderBlocks = (md) => {
   const lines = String(md || "").split("\n");
   const out = [];
   let list = null; // "ul" | "ol"

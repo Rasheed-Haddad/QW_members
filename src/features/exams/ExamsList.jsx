@@ -9,7 +9,7 @@ import {
   Square,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -17,15 +17,28 @@ import {
   clearError,
   delete_exam,
   set_new_data_of_exam,
+  set_list_view,
+  fetch_exam_names,
 } from "../../store/examsSlice.js";
-import EditScopeModal from "./EditScopeModal.jsx";
 import SubjectScopePicker from "./SubjectScopePicker.jsx";
+
+// الصفحة تتمرّر داخل <main> أو في النافذة بحسب الارتفاع — نقرأ ونكتب الاثنين
+const scrollBox = () => document.querySelector("main");
+const getScroll = () =>
+  Math.max(window.scrollY || 0, scrollBox()?.scrollTop || 0);
+const setScroll = (y) => {
+  window.scrollTo(0, y);
+  const m = scrollBox();
+  if (m) m.scrollTop = y;
+};
 
 const ExamsList = () => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const { exams, loading, error, status } = useSelector((state) => state.exams);
-  const [searchTerm, setSearchTerm] = useState("");
+  const { exams, loading, error, status, names_loading, names_college_id, list_view } =
+    useSelector((state) => state.exams);
+  const searchTerm = list_view.searchTerm;
+  const setSearchTerm = (v) => dispatch(set_list_view({ searchTerm: v }));
 
   // تطبيع عربي: من يكتب «الاسنان» يقصد «الأسنان»
   const normAr = (x) =>
@@ -42,10 +55,53 @@ const ExamsList = () => {
   const [STUDENT_ID_TO_ADD, SET_STUDENT_ID_TO_ADD] = useState("");
   const [is_free, set_is_free] = useState(false);
   const [is_moadal, set_is_moadal] = useState(false);
-  // المادة المفتوح عليها اختيار نطاق التعديل
-  const [scopeFor, setScopeFor] = useState(null);
-  // الجامعة والكلية المختارتان — تحكمان أي مواد تُجلب
-  const [pick, setPick] = useState({ universityId: null, collegeId: null });
+  // الجامعة والكلية المختارتان — تحكمان أي مواد تُجلب. في المخزن لا هنا:
+  // تبقى بعد الرجوع من مساحة عمل المادة.
+  const pick = {
+    universityId: list_view.universityId,
+    collegeId: list_view.collegeId,
+  };
+  const setPick = (p) =>
+    dispatch(
+      set_list_view({
+        universityId: p.universityId,
+        collegeId: p.collegeId,
+        // كلية أخرى ⇒ قائمة أخرى: موضع التمرير والتصفية القديمان لا يعنيانها
+        ...(p.collegeId !== list_view.collegeId
+          ? { scrollY: 0, searchTerm: "" }
+          : {}),
+      }),
+    );
+
+  // أسماء المواد تُطلب فقط إن لم تكن في المخزن لنفس الكلية. شاشة أخرى
+  // (ربط النصوص) قد تكون استبدلتها بمواد كلية غيرها منذ آخر زيارة.
+  const namesReady =
+    !!pick.collegeId && names_college_id === String(pick.collegeId);
+  useEffect(() => {
+    if (pick.collegeId && !namesReady && !names_loading) {
+      dispatch(fetch_exam_names({ college_id: pick.collegeId }));
+    }
+    // مرة عند الدخول: اختيار كلية جديدة يطلب أسماءها من المنتقي نفسه
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // استعادة موضع التمرير مرة واحدة، حين تُرسم المواد فعلاً
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current || loading || !namesReady) return;
+    restoredRef.current = true;
+    const y = list_view.scrollY || 0;
+    if (y > 0) requestAnimationFrame(() => setScroll(y));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, namesReady]);
+
+  // «تعديل» يفتح المادة بأكملها مباشرةً — بعد حفظ موضع التمرير للرجوع إليه
+  const openSubject = (exam) => {
+    dispatch(set_list_view({ scrollY: getScroll() }));
+    navigate(`/exams/work/${exam._id}`);
+    // التطبيق صفحة واحدة: بدون هذا تُفتح المادة عند موضع تمرير القائمة
+    requestAnimationFrame(() => setScroll(0));
+  };
 
   // إخفاء رسالة الحالة تلقائياً بعد 5 ثوانٍ
   useEffect(() => {
@@ -229,10 +285,10 @@ const ExamsList = () => {
         {/* الإجراءات */}
         <div className="flex flex-row items-center gap-2">
           {/* «عرض» حُذف: كان يفتح المادة كاملة (~294 KB) لمجرّد النظر،
-              وكل ما يعرضه متاح داخل التعديل. «تعديل» يسأل عن النطاق أولاً
-              فلا يُجلب إلا ما ستغيّره فعلاً. */}
+              وكل ما يعرضه متاح داخل التعديل. «تعديل» يدخل مساحة عمل المادة
+              بأكملها مباشرةً — اختيار النطاق (محاضرة/جزء) أُزيل. */}
           <button
-            onClick={() => setScopeFor(exam)}
+            onClick={() => openSubject(exam)}
             className="flex-1 flex flex-row items-center justify-center gap-1.5 py-2.5 px-3 rounded-md bg-yellow-50 hover:bg-yellow-100 transition-colors"
           >
             <Edit size={16} color="#ca8a04" />
@@ -383,18 +439,13 @@ const ExamsList = () => {
           {/* المواد لا تُعرض قبل اختيار كلية: الجلب الشامل كان ينقل
               مئات الكيلوبايتات لكل مادة قبل أن يعرف أحد ما يريد. */}
           {pick.collegeId ? (
-            shownExams.length > 0 ? (
+            !namesReady ? null : shownExams.length > 0 ? (
               shownExams.map((exam, index) => renderExamCard(exam, index))
             ) : (
               <ListEmptyComponent />
             )
           ) : null}
         </div>
-      )}
-
-      {/* اختيار نطاق التعديل — يُفتح من زر «تعديل» على أي بطاقة */}
-      {scopeFor && (
-        <EditScopeModal exam={scopeFor} onClose={() => setScopeFor(null)} />
       )}
     </div>
   );

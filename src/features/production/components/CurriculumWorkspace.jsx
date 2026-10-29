@@ -49,7 +49,7 @@ export default function CurriculumWorkspace({
   toolbar,
   height = "62vh",
 }) {
-  const [mode, setMode] = useState("split");
+  const [mode, setMode] = useState("edit");
   const [showOriginal, setShowOriginal] = useState(false);
   const [showImages, setShowImages] = useState(false);
   const [q, setQ] = useState("");
@@ -139,7 +139,6 @@ export default function CurriculumWorkspace({
     return out;
   }, [text, hits]);
 
-
   // تمرير الطبقة مع المحرِّر — بدونه ينفصل اللون عن الكلمة
   const syncScroll = useCallback(() => {
     const el = editorRef.current;
@@ -166,7 +165,8 @@ export default function CurriculumWorkspace({
           const el = editorRef.current;
           const mark = markRefs.current[n];
           if (!el || !mark) return;
-          const top = mark.offsetTop - el.clientHeight / 2 + mark.offsetHeight / 2;
+          const top =
+            mark.offsetTop - el.clientHeight / 2 + mark.offsetHeight / 2;
           el.scrollTop = Math.max(0, top);
           syncScroll();
           // التحديد أيضاً: يجعل الكتابة تستبدل الكلمة مباشرةً
@@ -194,16 +194,21 @@ export default function CurriculumWorkspace({
 
   return (
     <div className="flex flex-col rounded-2xl border border-gray-200 overflow-hidden bg-white">
-      {/* شريط الأدوات */}
-      <div className="flex items-center gap-2 p-2.5 border-b border-gray-100 flex-wrap bg-gray-50">
+      {/* شريط الأدوات — صفّان ثابتان، كل شيء ظاهر بلا تمرير:
+            ① الأدوات (مسح، تفريغ، تدقيق، ذاكرة، تقسيم)
+            ② العرض (الوضع، المقرَّر الأصلي، الصور) ثم البحث
+          كان الالتفاف الحرّ يرمي الأزرار على أسطرٍ يتبدّل ترتيبها مع عرض
+          النافذة؛ الصفّان يثبّتان مكان كل زرّ. */}
+      <div className="flex items-center gap-1.5 flex-wrap px-2.5 pt-2 pb-1.5 bg-gray-50">
         {toolbar}
-
-        <div className="flex items-center bg-gray-200/70 rounded-xl p-1 gap-1">
+      </div>
+      <div className="flex items-center gap-2 flex-wrap px-2.5 pb-2 pt-1.5 border-b border-gray-100 bg-gray-50 border-t border-t-gray-200/60">
+        <div className="flex items-center bg-gray-200/70 rounded-lg p-0.5 gap-0.5 shrink-0">
           {MODES.map(([k, label, Icon]) => (
             <button
               key={k}
               onClick={() => setMode(k)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${
+              className={`whitespace-nowrap flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold ${
                 mode === k ? "bg-white text-brand shadow-sm" : "text-gray-500"
               }`}
             >
@@ -220,25 +225,27 @@ export default function CurriculumWorkspace({
               ? "اعرض ملفّ المقرَّر الأصلي بجانب النصّ"
               : "لا ملفّ أصليّ لهذه المحاضرة في هذه الجلسة"
           }
-          className={`text-xs font-medium rounded-lg px-3 py-2 flex items-center gap-1.5 disabled:opacity-40 ${
+          className={`shrink-0 whitespace-nowrap text-xs font-semibold rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 border disabled:opacity-40 ${
             showOriginal
-              ? "bg-gray-800 text-white"
-              : "bg-gray-100 text-gray-700"
+              ? "bg-gray-800 text-white border-gray-800"
+              : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
           }`}
         >
-          <FileText size={13} /> المقرَّر الأصلي
+          <FileText size={14} /> المقرَّر الأصلي
         </button>
 
         <button
           onClick={() => setShowImages((v) => !v)}
-          className={`text-xs font-medium rounded-lg px-3 py-2 flex items-center gap-1.5 ${
-            showImages ? "bg-brand text-white" : "bg-brand/10 text-brand"
+          className={`shrink-0 whitespace-nowrap text-xs font-semibold rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 border ${
+            showImages
+              ? "bg-brand text-white border-brand"
+              : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
           }`}
         >
-          <ImageIcon size={13} /> الصور ({imgs.length})
+          <ImageIcon size={14} /> الصور ({imgs.length})
         </button>
 
-        <div className="relative mr-auto">
+        <div className="relative mr-auto shrink-0">
           <Search
             size={14}
             className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"
@@ -260,7 +267,7 @@ export default function CurriculumWorkspace({
             }}
             dir="rtl"
             placeholder="ابحث وانتقل إلى الكلمة…"
-            className="w-56 pr-8 pl-7 py-2 rounded-xl border border-gray-200 text-xs font-arabic outline-none focus:border-brand"
+            className="w-44 pr-8 pl-7 py-1.5 rounded-lg border border-gray-200 text-xs font-arabic outline-none focus:border-brand bg-white"
           />
           {q && (
             <button
@@ -274,7 +281,7 @@ export default function CurriculumWorkspace({
 
         {/* التنقّل بين المطابقات — هذا ما يفيد، لا رقم السطر */}
         {q.trim() && (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             <span
               className={`text-xs font-bold tabular-nums px-1.5 ${
                 hits.length ? "text-gray-600" : "text-red-500"
@@ -356,9 +363,9 @@ export default function CurriculumWorkspace({
                     }}
                     className={`rounded text-transparent ${
                       sg.hit === hitIdx
-                        // الحالية بلونٍ صارخ، والبقيّة بلونٍ هادئ: الفرق بينهما
-                        // هو ما يجعل «التالي» مفهوماً بلا قراءة
-                        ? "bg-orange-400/70 ring-2 ring-orange-500"
+                        ? // الحالية بلونٍ صارخ، والبقيّة بلونٍ هادئ: الفرق بينهما
+                          // هو ما يجعل «التالي» مفهوماً بلا قراءة
+                          "bg-orange-400/70 ring-2 ring-orange-500"
                         : "bg-amber-200/60"
                     }`}
                   >

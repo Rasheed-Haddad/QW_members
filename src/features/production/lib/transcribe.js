@@ -15,26 +15,28 @@ const POLL_MS = 3000;
 const POLL_MAX = 200; // ~10 دقائق: معالجة Google لتسجيلٍ طويل تأخذ وقتاً
 
 /**
- * @param {File} file            الملف الصوتي
- * @param {object} opts          { model, prompt, onStage, onProgress }
+ * يرفع ملفاً (صوتاً أو PDF أو صورة) إلى Gemini Files وينتظر جاهزيته.
+ * مشترك بين التفريغ الصوتي وتفريغ الدورات.
+ * يعيد { fileName, uri, mimeType }.
  */
-export const transcribeAudio = async (
+export const uploadGeminiFile = async (
   file,
-  { model, prompt, onStage, onProgress } = {},
+  { onStage, onProgress, label = "الملف" } = {},
 ) => {
   // ١+٢) الرفع: البايتات خاماً إلى خادمنا، وهو يمرّرها مجرىً إلى Google.
   // المباشر من المتصفّح مستحيل: Google لا يرسل ترويسات CORS على رابط الرفع.
-  onStage?.("جارٍ رفع التسجيل…");
+  onStage?.(`جارٍ رفع ${label}…`);
   let up;
   try {
     up = await axios.post(`${API_BASE_URL}/production/transcribe-upload`, file, {
       headers: {
         "Content-Type": file.type || "application/octet-stream",
         "X-Panel-Password": PASSWORD,
-        // الرفع الخام لا يمرّ باعتراض الجسم: هويّتنا في الترويسة
+        // الرفع مجرىً خام لا JSON، فلا يمرّ بالاعتراض الذي يحقن هوية العضو
+        // في الجسم — تُرسَل في ترويسة
         "X-Employer-Id": getEmployerId() || "",
         "X-Audio-Mime": file.type || "audio/mpeg",
-        "X-Audio-Name": encodeURIComponent(file.name || "audio"),
+        "X-Audio-Name": encodeURIComponent(file.name || "file"),
       },
       timeout: 0, // رفع 60م.ب على شبكةٍ بطيئة يتجاوز أي مهلة افتراضية
       maxBodyLength: Infinity,
@@ -47,13 +49,13 @@ export const transcribeAudio = async (
     const d = e?.response?.data;
     if (e?.response?.status === 404) {
       throw new Error(
-        "مسار التفريغ غير موجود على الخادم — ادفع الخادم أو انتظر اكتمال النشر.",
+        "مسار الرفع غير موجود على الخادم — ادفع الخادم أو انتظر اكتمال النشر.",
       );
     }
     throw new Error(
       [d?.message, d?.detail].filter(Boolean).join(" — ") ||
         e.message ||
-        "تعذّر رفع التسجيل",
+        `تعذّر رفع ${label}`,
     );
   }
 
@@ -61,7 +63,7 @@ export const transcribeAudio = async (
   if (!fileName) throw new Error("لم يُعِد Google معرّف الملف");
 
   // ٣) الانتظار حتى تكتمل معالجته
-  onStage?.("Google يعالج التسجيل…");
+  onStage?.(`Google يعالج ${label}…`);
   let state = up.data?.state;
   let uri = up.data?.uri;
   for (let i = 0; i < POLL_MAX && state === "PROCESSING"; i++) {
@@ -75,28 +77,45 @@ export const transcribeAudio = async (
     state = st.data?.state;
     uri = st.data?.uri || uri;
     if (st.data?.error) throw new Error(st.data.error);
-    onStage?.(`Google يعالج التسجيل… (${i + 1})`);
+    onStage?.(`Google يعالج ${label}… (${i + 1})`);
   }
   if (state !== "ACTIVE") {
     throw new Error(`الملف لم يجهز (${state || "?"}) — أعد المحاولة`);
   }
+  return { fileName, uri, mimeType: up.data?.mimeType || file.type };
+};
+
+/** حذف الملف من Google — فشله لا يهمّ: Google يحذفه تلقائياً بعد 48 ساعة */
+export const cleanupGeminiFile = (fileName) =>
+  axios
+    .post(`${API_BASE_URL}/production/transcribe-cleanup`, { PASSWORD, fileName })
+    .catch(() => {});
+
+/**
+ * @param {File} file            الملف الصوتي
+ * @param {object} opts          { model, prompt, onStage, onProgress }
+ */
+export const transcribeAudio = async (
+  file,
+  { model, prompt, onStage, onProgress } = {},
+) => {
+  const { fileName, uri, mimeType } = await uploadGeminiFile(file, {
+    onStage,
+    onProgress,
+    label: "التسجيل",
+  });
 
   // ٤) التفريغ — الجسم صغير، لكن الرد يستغرق دقائق
   onStage?.("جارٍ التفريغ — قد يستغرق دقائق حسب طول التسجيل…");
   try {
     const r = await axios.post(
       `${API_BASE_URL}/production/transcribe-run`,
-      { PASSWORD, fileUri: uri, mimeType: up.data?.mimeType || file.type || "audio/mpeg", model, prompt },
+      { PASSWORD, fileUri: uri, mimeType: mimeType || "audio/mpeg", model, prompt },
       { timeout: 15 * 60 * 1000 },
     );
     return r.data;
   } finally {
     // التنظيف في كل الأحوال — لا نترك تسجيلات المقرَّر على خوادم Google
-    axios
-      .post(`${API_BASE_URL}/production/transcribe-cleanup`, { PASSWORD, fileName })
-      .catch(() => {
-        // فشل التنظيف لا يعني فشل التفريغ — Google يحذف الملف تلقائياً
-        // بعد 48 ساعة على أي حال
-      });
+    cleanupGeminiFile(fileName);
   }
 };

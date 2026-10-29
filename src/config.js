@@ -17,7 +17,19 @@ export const PASSWORD = "";
 // هوية العضو الحالي — تُضبَط عند تسجيل الدخول.
 // خارج Redux عمداً: الاعتراض أدناه يعمل في كل طلب axios بما فيها ما تطلقه
 // الشاشات المنسوخة، وهي لا تعرف متجرنا ولا يصحّ أن تعرفه.
-let CURRENT_EMPLOYER_ID = null;
+// تُقرأ من المخزن فور تحميل الوحدة لا في تأثيرٍ بعد أوّل رسمة: بعد تحديث
+// الصفحة تكون الجلسة مستعادةً والشاشة تطلق طلباتها في الرسمة الأولى، فلو
+// انتظرنا useEffect لخرج أوّل طلبٍ بلا هوية فيردّه الخادم 401.
+// المفتاح نفسه الذي يكتبه `store/authSlice.js` — إن غُيّر هناك فليُغيَّر هنا.
+let CURRENT_EMPLOYER_ID = (() => {
+  try {
+    const raw = localStorage.getItem("employer_session_v1");
+    const e = raw ? JSON.parse(raw) : null;
+    return e && e._id ? String(e._id) : null;
+  } catch {
+    return null;
+  }
+})();
 
 export const setEmployerId = (id) => {
   CURRENT_EMPLOYER_ID = id ? String(id) : null;

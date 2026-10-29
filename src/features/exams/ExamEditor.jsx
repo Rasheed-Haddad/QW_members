@@ -904,34 +904,6 @@ const ExamEditor = () => {
           onRenameInSummary={handleRenameInSummary}
           onRenameInQuestions={handleRenameInQuestions}
         />
-
-        {/* المحتوى صار داخل كل محاضرة بعد توحيد الهيكل. هذا المحرّر
-            لحقول المادة وحدها — والأسئلة والملخص من مساحة العمل. */}
-        <div className="mx-3 p-4 rounded-2xl bg-brand/5 border border-brand/20">
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="w-9 h-9 rounded-xl bg-brand/10 flex items-center justify-center shrink-0">
-              <Layers size={17} className="text-brand" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-gray-800">
-                الأسئلة والملخص صارا داخل كل محاضرة
-              </p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                كل محتوى المحاضرة في مكان واحد: نصّ وملخص وأسئلة وبطاقات وتحريري
-                — والمطابقة بمعرّف المحاضرة لا بالاسم.
-              </p>
-            </div>
-            {isEditing && (
-              <button
-                type="button"
-                onClick={() => navigate(`/exams/work/${examId}`)}
-                className="mr-auto bg-brand text-white text-sm font-bold rounded-xl px-5 py-2.5 flex items-center gap-2 shrink-0"
-              >
-                <Layers size={16} /> افتح مساحة العمل
-              </button>
-            )}
-          </div>
-        </div>
       </div>
 
       {/* ─── Sort Modal ─────────────────────────────────────────────────────── */}

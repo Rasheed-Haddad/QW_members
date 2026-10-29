@@ -23,6 +23,28 @@ import { openForView, renderPageToCanvas } from "../lib/pdfEngine";
 
 const GAP = 12;
 
+// ─── هل يعرض هذا المتصفّح PDF داخل إطار؟ ─────────────────────────────────────
+// متصفّحات الموبايل (Chrome على أندرويد، Safari على iOS) **لا تعرض PDF
+// داخلياً**: تُظهر بدلاً منه صفحةً سوداء فيها معرّف الـblob وزرّ «فتح» لا
+// يفعل شيئاً — لأن الـblob لا يُسلَّم إلى تطبيقٍ خارجي.
+//
+// فنكشف القدرة ونسقط إلى رسم pdf.js على canvas، وهو يعمل في كل مكان لأنه
+// يرسم بكسلات لا يستدعي عارضاً.
+export const canInlinePdf = (() => {
+  try {
+    if (typeof navigator === "undefined") return false;
+    // معياريّ وحديث: يقولها المتصفّح صراحةً
+    if (navigator.pdfViewerEnabled === false) return false;
+    // احتياطٌ لما قبله: لا متصفّح موبايل يعرض PDF داخلياً
+    if (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "")) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 /**
  * `forceNative` — عارض المتصفّح دائماً بلا زرّ تحويل. تستعمله نافذةُ مراجعة
  *   التدقيق: المطلوب هناك قراءة الورق للمقارنة، لا التكبير ولا شبكة الصفحات.
@@ -46,7 +68,11 @@ export default function PdfPane({
   // تالفاً أو الخطّ غير مُضمَّن خرجت الحروف مقطوشة، ولا يُصلحه إعداد.
   // عارض المتصفّح (Chrome/Electron) محرِّكٌ آخر أصلب في هذه الحالات، فنتيح
   // التحويل إليه بضغطة بدل أن يبقى المستخدم أمام نصٍّ لا يُقرأ.
-  const [native, setNative] = useState(forceNative);
+  // `forceNative` رغبةٌ لا أمر: إن عجز المتصفّح عن العرض الداخلي فالشبكة
+  // أصدق من إطارٍ أسود.
+  // العارض هو الافتراضي في كل مكان (المقارنة قراءةٌ للورق قبل كل شيء)،
+  // والشبكة بزرٍّ لمن يحتاج التكبير الدقيق
+  const [native, setNative] = useState(canInlinePdf);
   const [blobUrl, setBlobUrl] = useState("");
 
   useEffect(() => {
@@ -144,7 +170,7 @@ export default function PdfPane({
             {pdf.numPages} صفحة
           </span>
         )}
-        {!forceNative && (
+        {(!forceNative || !canInlinePdf) && canInlinePdf && (
         <button
           onClick={() => setNative((v) => !v)}
           title={
@@ -161,6 +187,14 @@ export default function PdfPane({
           {native ? <Layers size={12} /> : <MonitorPlay size={12} />}
           {native ? "شبكة" : "عارض"}
         </button>
+        )}
+        {!canInlinePdf && (
+          <span
+            className="text-[10px] text-gray-400"
+            title="متصفّحات الموبايل لا تعرض PDF داخل الصفحة — تُرسم الصفحات هنا صوراً بدل ذلك"
+          >
+            رسم الصفحات
+          </span>
         )}
         {!native && (
           <>

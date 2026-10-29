@@ -26,6 +26,9 @@ import {
 } from "./v2api";
 import LectureTabs from "./LectureTabs";
 import SubjectFieldsPanel from "./SubjectFieldsPanel";
+import BulkProcessor from "./BulkProcessor";
+import CourseExtractAction from "./CourseExtractAction";
+import SplitPdfAction from "../production/components/SplitPdfAction";
 
 // ─── مساحة عمل المادة — الهيكل الموحَّد ───────────────────────────────────────
 // شريطان: المحاضرات، ومحتوى المحاضرة المختارة بتبويباتها الخمسة كاملةً.
@@ -53,6 +56,8 @@ export default function SubjectWorkspace() {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [renaming, setRenaming] = useState(null);
+  // يتغيّر حين تحفظ «معالجة كل المحاضرات» محاضرةً — يعيد فتح المعروضة بمحتواها الجديد
+  const [tabsVersion, setTabsVersion] = useState(0);
 
   const load = useCallback(
     async (keep = true) => {
@@ -186,6 +191,26 @@ export default function SubjectWorkspace() {
           <p className="text-xs text-gray-400">{lectures.length} محاضرة</p>
         </div>
 
+        {/* أدوات المقرَّر كاملاً لا محاضرةٍ واحدة: التقسيم ثم المعالجة الشاملة */}
+        <SplitPdfAction />
+        <BulkProcessor
+          subjectId={id}
+          subjectName={subject?.name}
+          lectures={lectures}
+          onLectureSaved={(lid) => {
+            load();
+            if (lid === selected) setTabsVersion((v) => v + 1);
+          }}
+        />
+        <CourseExtractAction
+          subjectId={id}
+          lectures={lectures}
+          onSaved={(ids) => {
+            load();
+            if (ids.includes(selected)) setTabsVersion((v) => v + 1);
+          }}
+        />
+
         {/* جاهزية «معدل» معروضة دائماً — شرط بيع الخطة */}
         {lectures.length > 0 && (
           <span
@@ -204,16 +229,6 @@ export default function SubjectWorkspace() {
             معدل: {ready}/{lectures.length}
           </span>
         )}
-
-        <div className="mr-auto flex items-center gap-2">
-          <button
-            onClick={() => navigate("/exams/link-texts")}
-            title="ربط نصوص المقرَّرات المرفوعة سابقاً بمحاضراتها"
-            className="text-xs text-gray-600 border border-gray-200 rounded-xl px-3 py-2 flex items-center gap-1.5"
-          >
-            <Link2 size={14} /> ربط النصوص
-          </button>
-        </div>
       </div>
 
       {error && (
@@ -412,7 +427,7 @@ export default function SubjectWorkspace() {
           {selected ? (
             <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
               <LectureTabs
-                key={selected}
+                key={`${selected}:${tabsVersion}`}
                 subjectId={id}
                 subjectName={subject?.name}
                 lectureId={selected}

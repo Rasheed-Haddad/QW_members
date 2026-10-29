@@ -224,3 +224,35 @@ export const formatSize = (n) => {
   const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
   return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${u[i]}`;
 };
+
+/**
+ * يقسم مستنداً إلى عدّة ملفات: ranges = [{ from, to }] مرقّمة من 1 وشاملة.
+ * الصفحات تُنسخ كما هي — محتواها وصورها بلا إعادة ترميز ولا ضغط — فالجودة
+ * مطابقة للأصل حرفياً. `useObjectStreams: false` يُبقي بنية الملف بلا ضغط
+ * إضافي كذلك. الأصل يُحمَّل مرة واحدة لكل الأقسام.
+ * `onEach(i)` يُستدعى بعد كل ملف — للتقدّم.
+ */
+export const splitPdf = async (bytes, ranges, onEach) => {
+  const { PDFDocument } = await import("pdf-lib");
+  // نسخة مستقلة: pdf.js قد يكون استولى على المخزن الأصلي
+  const src = await PDFDocument.load(bytes.slice(0), { ignoreEncryption: true });
+  const outs = [];
+  for (let i = 0; i < ranges.length; i++) {
+    const { from, to } = ranges[i];
+    const out = await PDFDocument.create();
+    const idx = [];
+    for (let p = from; p <= to; p++) idx.push(p - 1);
+    const pages = await out.copyPages(src, idx);
+    pages.forEach((p) => out.addPage(p));
+    outs.push(await out.save({ useObjectStreams: false }));
+    onEach?.(i);
+  }
+  return outs;
+};
+
+/** عدد صفحات مستند — للتحقّق من حدود التقسيم */
+export const pageCount = async (bytes) => {
+  const { PDFDocument } = await import("pdf-lib");
+  const src = await PDFDocument.load(bytes.slice(0), { ignoreEncryption: true });
+  return src.getPageCount();
+};
