@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   RotateCcw,
   Square,
+  CheckSquare,
   Play,
   KeyRound,
 } from "lucide-react";
@@ -27,6 +28,7 @@ import { ToolBtn } from "../production/components/ToolBtn";
 import { scanLecture, checkR2 } from "../production/lib/mistralOcr";
 import { generateMcq, generateSummary, claudeError } from "../production/lib/claudeRun";
 import { parsePastedQuestions } from "../production/lib/parseQuestions";
+import { CostScope } from "../production/lib/costScope";
 
 // ─── معالجة كل المحاضرات ──────────────────────────────────────────────────────
 // ملفٌ لكل محاضرة ← مسح ضوئي ← تدقيق (يراجعه المحرِّر) ← ملخّص (Claude) ←
@@ -115,7 +117,7 @@ const deferred = () => {
 };
 
 /** توليد بطاقات أو تحريري بـGemini — يُعاد عند الفشل حتى خمس مرات */
-const geminiGenerate = async (kind, text, focus, count, signal) => {
+const geminiGenerate = async (kind, text, focus, count, signal, cost) => {
   for (let attempt = 1; ; attempt++) {
     try {
       // eslint-disable-next-line no-await-in-loop
@@ -126,6 +128,7 @@ const geminiGenerate = async (kind, text, focus, count, signal) => {
         model: DEFAULT_GEMINI_MODEL,
         focus,
         count: Number(count),
+        cost,
       });
       const items = kind === "flash" ? r.data?.cards : r.data?.questions;
       if (!items?.length) throw new Error("لم يُعِد النموذج أي عنصر");
@@ -172,6 +175,8 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
         lecture_id: l.lecture_id,
         name: l.name || "بلا اسم",
         filled: completedCount(l),
+        // مشمولة بالمعالجة؟ كلها افتراضياً، وتُستثنى بإلغاء علامتها
+        include: true,
         file: null,
         ...DEFAULTS,
       })),
@@ -210,10 +215,17 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
     setUnmatched(left);
   };
 
+  // «للكل» يسري على المشمولة وحدها — المستثناة لن تُعالَج فلا معنى لتغييرها
   const applyDefaultsToAll = (field, value) =>
-    setRows((rs) => rs.map((r) => ({ ...r, [field]: value })));
+    setRows((rs) => rs.map((r) => (r.include ? { ...r, [field]: value } : r)));
 
-  const jobs = rows.filter((r) => r.file);
+  const setIncludeAll = (fn) => setRows((rs) => rs.map((r) => ({ ...r, include: fn(r) })));
+
+  // تُعالَج المحاضرة إن كانت مشمولةً ولها ملف
+  const jobs = rows.filter((r) => r.include && r.file);
+  const includedNoFile = rows.filter((r) => r.include && !r.file).length;
+  const excludedCount = rows.filter((r) => !r.include).length;
+  const allIncluded = rows.length > 0 && excludedCount === 0;
   const claudeReason = claudeDisabledReason(status);
   const canStart = jobs.length > 0 && apiKey.trim() && !claudeReason && prefs.model && prefs.effort;
 
@@ -228,6 +240,7 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
       effort: cfg.effort,
       lecture_name: job.name,
       subject_name: subjectName,
+      cost: { exam_id: subjectId, lecture_id: id },
     };
     let step = from;
     try {
@@ -258,7 +271,7 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
         } else if (step === "flash") {
           patchState(id, { note: `Gemini (${DEFAULT_GEMINI_MODEL})` });
           // eslint-disable-next-line no-await-in-loop
-          const cards = await geminiGenerate("flash", res.text, job.flashFocus, job.flashCount, signal.current);
+          const cards = await geminiGenerate("flash", res.text, job.flashFocus, job.flashCount, signal.current, base.cost);
           res.flash = cards.map((c, i) => ({
             card_id: `${id}_ai${i + 1}`,
             front: c.front,
@@ -267,7 +280,7 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
         } else if (step === "written") {
           patchState(id, { note: `Gemini (${DEFAULT_GEMINI_MODEL})` });
           // eslint-disable-next-line no-await-in-loop
-          const qs = await geminiGenerate("written", res.text, job.writtenFocus, job.writtenCount, signal.current);
+          const qs = await geminiGenerate("written", res.text, job.writtenFocus, job.writtenCount, signal.current, base.cost);
           res.written = qs.map((q, i) => ({
             q_id: `${id}_aiw${i + 1}`,
             question: q.question,
@@ -334,6 +347,7 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
             bytes: j.file.bytes,
             withImages: r2?.ready !== false,
             onStage: (note) => patchState(j.lecture_id, { note }),
+            cost: { exam_id: subjectId, lecture_id: j.lecture_id },
           });
           patchState(j.lecture_id, { stage: "ocr_done", note: "بانتظار دوره في التدقيق" });
           ocr[i].resolve(r.markdown);
@@ -385,6 +399,7 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
           bytes: job.file.bytes,
           withImages: r2?.ready !== false,
           onStage: (note) => patchState(job.lecture_id, { note }),
+          cost: { exam_id: subjectId, lecture_id: job.lecture_id },
         });
         if (spellJob) {
           // تدقيقٌ آخر مفتوح الآن — تنتظر دورها بعده
@@ -528,9 +543,54 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
 
               {/* جدول المحاضرات */}
               <div className="flex-1 overflow-auto p-4">
+                {/* انتقاء المحاضرات المشمولة */}
+                <div className="flex items-center gap-2 flex-wrap mb-2 text-xs">
+                  <span className="text-gray-500">المحاضرات المشمولة:</span>
+                  <button
+                    onClick={() => setIncludeAll(() => true)}
+                    className="rounded-lg border border-gray-200 px-2.5 py-1 hover:bg-gray-50"
+                  >
+                    تحديد الكل
+                  </button>
+                  <button
+                    onClick={() => setIncludeAll(() => false)}
+                    className="rounded-lg border border-gray-200 px-2.5 py-1 hover:bg-gray-50"
+                  >
+                    إلغاء الكل
+                  </button>
+                  <button
+                    onClick={() => setIncludeAll((r) => !!r.file)}
+                    className="rounded-lg border border-gray-200 px-2.5 py-1 hover:bg-gray-50"
+                  >
+                    ما له ملف فقط
+                  </button>
+                  <button
+                    onClick={() => setIncludeAll((r) => r.filled === 0)}
+                    className="rounded-lg border border-gray-200 px-2.5 py-1 hover:bg-gray-50"
+                    title="المحاضرات التي لا محتوى فيها بعد — تحمي المكتمل من الاستبدال"
+                  >
+                    الفارغة فقط
+                  </button>
+                  <span className="text-gray-400">
+                    {rows.length - excludedCount} من {rows.length}
+                  </span>
+                </div>
                 <table className="w-full text-sm border-separate border-spacing-y-1.5 min-w-[1100px]">
                   <thead>
                     <tr className="text-[11px] text-gray-500 text-right">
+                      <th className="px-2 w-8">
+                        <button
+                          onClick={() => setIncludeAll(() => !allIncluded)}
+                          title={allIncluded ? "إلغاء الكل" : "تحديد الكل"}
+                          className="flex items-center"
+                        >
+                          {allIncluded ? (
+                            <CheckSquare size={16} className="text-brand" />
+                          ) : (
+                            <Square size={16} className="text-gray-400" />
+                          )}
+                        </button>
+                      </th>
                       <th className="font-bold px-2">المحاضرة</th>
                       <th className="font-bold px-2">الملف</th>
                       <th className="font-bold px-2">تركيز البطاقات</th>
@@ -541,8 +601,8 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
                     </tr>
                     {/* صفّ «للكل»: تغيير قيمته يسري على كل المحاضرات */}
                     <tr className="text-[11px]">
-                      <td className="px-2 text-gray-400" colSpan={2}>
-                        تطبيق قيمة على الكل ←
+                      <td className="px-2 text-gray-400" colSpan={3}>
+                        تطبيق قيمة على كل المشمولة ←
                       </td>
                       {[
                         ["flashFocus", "text"],
@@ -574,11 +634,36 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
                   </thead>
                   <tbody>
                     {rows.map((r) => (
-                      <tr key={r.lecture_id} className={r.file ? "bg-brand/[0.03]" : "opacity-70"}>
+                      <tr
+                        key={r.lecture_id}
+                        className={
+                          !r.include ? "opacity-40" : r.file ? "bg-brand/[0.03]" : "opacity-80"
+                        }
+                      >
                         <td className="px-2 py-1.5 rounded-r-lg">
+                          <button
+                            onClick={() => setRow(r.lecture_id, { include: !r.include })}
+                            title={r.include ? "استثناء من المعالجة" : "شمول بالمعالجة"}
+                            className="flex items-center"
+                          >
+                            {r.include ? (
+                              <CheckSquare size={16} className="text-brand" />
+                            ) : (
+                              <Square size={16} className="text-gray-400" />
+                            )}
+                          </button>
+                        </td>
+                        <td className="px-2 py-1.5">
                           <p className="font-semibold text-gray-800 font-arabic">{r.name}</p>
-                          {r.filled > 0 && (
-                            <p className="text-[10px] text-amber-700">فيها محتوى ({r.filled}/5) — سيُستبدل</p>
+                          {!r.include ? (
+                            <p className="text-[10px] text-gray-500">مستثناة — لن تُمسّ</p>
+                          ) : (
+                            r.filled > 0 && (
+                              <p className="text-[10px] text-amber-700">فيها محتوى ({r.filled}/5) — سيُستبدل</p>
+                            )
+                          )}
+                          {r.include && !r.file && (
+                            <p className="text-[10px] text-red-500">بلا ملف — ستُتخطّى</p>
                           )}
                         </td>
                         <td className="px-2">
@@ -592,7 +677,8 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
                               onChange={async (e) => {
                                 const f = e.target.files?.[0];
                                 e.target.value = "";
-                                if (f) setRow(r.lecture_id, { file: await readFile(f) });
+                                // اختيار ملفٍ لها نيّةُ معالجتها — تُشمل تلقائياً
+                                if (f) setRow(r.lecture_id, { file: await readFile(f), include: true });
                               }}
                             />
                           </label>
@@ -649,15 +735,18 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
 
               <div className="px-4 py-3 border-t border-gray-200 flex items-center gap-3">
                 <p className="text-xs text-gray-500 flex-1">
-                  {jobs.length} محاضرة لها ملف · المسح يتقدّم وحده، والتدقيق يُفتح لكل محاضرة بالترتيب مع
-                  تنبيه صوتي، ثم تكمل البقية في الخلفية وأنت تراجع التالية.
+                  <span className="font-semibold text-gray-700">{jobs.length} محاضرة ستُعالَج</span>
+                  {includedNoFile > 0 && ` · ${includedNoFile} مشمولة بلا ملف ستُتخطّى`}
+                  {excludedCount > 0 && ` · ${excludedCount} مستثناة`}
+                  {" — "}المسح يتقدّم وحده، والتدقيق يُفتح لكل محاضرة بالترتيب مع تنبيه صوتي، ثم
+                  تكمل البقية في الخلفية وأنت تراجع التالية.
                 </p>
                 <button
                   onClick={start}
                   disabled={!canStart}
                   title={
                     !jobs.length
-                      ? "اختر ملفاً لمحاضرة واحدة على الأقل"
+                      ? "حدّد محاضرةً واحدة على الأقل واختر ملفها"
                       : !apiKey.trim()
                         ? "أدخل مفتاح Mistral"
                         : claudeReason
@@ -741,6 +830,7 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
 
       {/* نافذة التدقيق لمحاضرة الدور — تعلو المتابعة وتفتح وحدها */}
       {spellJob && createPortal(
+        <CostScope.Provider value={{ exam_id: subjectId, lecture_id: spellJob.id }}>
         <SpellAction
           key={spellJob.key}
           autoRunKey={spellJob.key}
@@ -762,7 +852,8 @@ export default function BulkProcessor({ subjectId, subjectName, lectures, onLect
             setSpellJob(null);
             resolve?.(t);
           }}
-        />,
+        />
+        </CostScope.Provider>,
         document.body,
       )}
     </>

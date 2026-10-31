@@ -94,6 +94,7 @@ export default function CourseExtractAction({ subjectId, lectures, onSaved }) {
           mimeType: up.mimeType || file.type || "application/pdf",
           model,
           lectures: lectures.map((l) => l.name || "بلا اسم"),
+          cost: { exam_id: subjectId },
         },
         { timeout: 15 * 60 * 1000 },
       );

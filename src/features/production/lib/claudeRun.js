@@ -38,7 +38,7 @@ const runBatch = async (kind, body, { signal, onStatus, label }) => {
     let r;
     try {
       // eslint-disable-next-line no-await-in-loop
-      r = await post("/production/claude-batch/result", { batch_id, kind });
+      r = await post("/production/claude-batch/result", { batch_id, kind, cost: body.cost });
     } catch (e) {
       // انقطاع شبكةٍ عابر في السؤال لا يُسقط دفعةً تعمل — يُعاد في الدورة
       // التالية. ردٌّ صريح من الخادم (فشل الدفعة، مفتاح مرفوض…) خطأٌ حقيقي.

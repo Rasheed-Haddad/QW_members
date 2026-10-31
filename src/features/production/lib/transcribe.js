@@ -97,7 +97,7 @@ export const cleanupGeminiFile = (fileName) =>
  */
 export const transcribeAudio = async (
   file,
-  { model, prompt, onStage, onProgress } = {},
+  { model, prompt, onStage, onProgress, cost } = {},
 ) => {
   const { fileName, uri, mimeType } = await uploadGeminiFile(file, {
     onStage,
@@ -110,7 +110,7 @@ export const transcribeAudio = async (
   try {
     const r = await axios.post(
       `${API_BASE_URL}/production/transcribe-run`,
-      { PASSWORD, fileUri: uri, mimeType: mimeType || "audio/mpeg", model, prompt },
+      { PASSWORD, fileUri: uri, mimeType: mimeType || "audio/mpeg", model, prompt, cost },
       { timeout: 15 * 60 * 1000 },
     );
     return r.data;

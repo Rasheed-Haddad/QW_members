@@ -13,6 +13,7 @@ import ExamDetails from "./features/exams/ExamDetails";
 import ExamEditor from "./features/exams/ExamEditor";
 import SubjectWorkspace from "./features/exams/SubjectWorkspace";
 import Login from "./features/auth/Login";
+import MyEarnings from "./features/earnings/MyEarnings";
 import { setEmployerId } from "./config";
 
 // ─── تطبيق الأعضاء ────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ function AuthGate() {
           <Route path="exams/:id" element={<ExamDetails />} />
           <Route path="exams/edit/:id" element={<ExamEditor />} />
           <Route path="exams/work/:id" element={<SubjectWorkspace />} />
+          <Route path="earnings" element={<MyEarnings />} />
 
           <Route path="*" element={<Navigate to="/exams" replace />} />
         </Route>

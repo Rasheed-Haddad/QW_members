@@ -8,6 +8,7 @@ import {
   Plus,
 } from "lucide-react";
 import { generateMcq, claudeError } from "../lib/claudeRun";
+import { useCostScope } from "../lib/costScope";
 import { parsePastedQuestions, diagnosePaste } from "../lib/parseQuestions";
 import {
   ClaudeModelPicker,
@@ -35,6 +36,7 @@ export default function ClaudeMcqAction({
   subjectName,
   onAdd,
 }) {
+  const costScope = useCostScope();
   const status = useClaudeStatus();
   const prefs = useClaudePrefs(status);
   const { model, effort } = prefs;
@@ -71,6 +73,7 @@ export default function ClaudeMcqAction({
           effort,
           lecture_name: lectureName,
           subject_name: subjectName,
+          cost: costScope,
         },
         { onStatus: setStatusLine },
       );

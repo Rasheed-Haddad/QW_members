@@ -10,6 +10,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { generateSummary, claudeError } from "../lib/claudeRun";
+import { useCostScope } from "../lib/costScope";
 import {
   ClaudeModelPicker,
   claudeDisabledReason,
@@ -32,6 +33,7 @@ export default function ClaudeSummaryAction({
   subjectName,
   onApply, // (sections, mode: "replace" | "append")
 }) {
+  const costScope = useCostScope();
   const status = useClaudeStatus();
   const prefs = useClaudePrefs(status);
   const [open, setOpen] = useState(false);
@@ -61,6 +63,7 @@ export default function ClaudeSummaryAction({
           effort: prefs.effort,
           lecture_name: lectureName,
           subject_name: subjectName,
+          cost: costScope,
         },
         { onStatus: setStatusLine },
       );

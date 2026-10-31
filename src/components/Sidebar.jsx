@@ -1,7 +1,7 @@
 import { useDispatch, useSelector } from "react-redux";
 import { Link, useLocation } from "react-router-dom";
 import { setActiveTab, toggleSidebar } from "../store/uiSlice";
-import { FileTextIcon } from "lucide-react";
+import { FileTextIcon, Wallet } from "lucide-react";
 
 const Sidebar = () => {
   const dispatch = useDispatch();
@@ -14,6 +14,12 @@ const Sidebar = () => {
       label: "المواد",
       icon: <FileTextIcon size={20} />,
       path: "/exams",
+    },
+    {
+      id: "earnings",
+      label: "أرباحي",
+      icon: <Wallet size={20} />,
+      path: "/earnings",
     },
   ];
 

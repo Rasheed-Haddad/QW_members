@@ -104,6 +104,7 @@ export const scanLecture = async ({
   model,
   onStage,
   withImages = true,
+  cost = null,
 }) => {
   const stats = { uploaded: 0, deduped: 0 };
   const fileName = `${name || "lecture"}.pdf`;
@@ -124,6 +125,18 @@ export const scanLecture = async ({
 
   const pages = resp?.pages || [];
   if (!pages.length) throw new Error("لم يُعِد Mistral أي صفحة");
+
+  // الكلفة: الصفحات كما عدّها Mistral في ردّه — في الخلفية، لا يعطّل المسح
+  axios
+    .post(`${API_BASE_URL}/costs/log-mistral`, {
+      PASSWORD,
+      pages: resp?.usage_info?.pages_processed ?? pages.length,
+      model: resp?.model || "",
+      requested: model || OCR_MODEL,
+      ref: signed.file_id,
+      cost,
+    })
+    .catch(() => {});
 
   // ٣) الصور: ترشيح ← رفع ← استبدال الإشارات، صفحةً صفحة
   const mds = [];

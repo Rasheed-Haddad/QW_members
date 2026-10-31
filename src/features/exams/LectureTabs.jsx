@@ -40,6 +40,7 @@ import {
 import PasteQuestions from "../production/components/PasteQuestions";
 import CurriculumWorkspace from "../production/components/CurriculumWorkspace";
 import SpellMemoryAction from "../production/components/SpellMemoryAction";
+import { CostScope } from "../production/lib/costScope";
 
 // ─── تبويبات محتوى المحاضرة — الهيكل الموحَّد ─────────────────────────────────
 // كل شيء يأتي من كائن المحاضرة الواحد ويُحفظ إليه بـlecture_id.
@@ -252,6 +253,10 @@ export default function LectureTabs({
   initialTab = null,
 }) {
   const [tab, setTab] = useState(initialTab || "curriculum");
+  const costScope = useMemo(
+    () => ({ exam_id: subjectId, lecture_id: lectureId }),
+    [subjectId, lectureId],
+  );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(null);
@@ -440,6 +445,7 @@ export default function LectureTabs({
   };
 
   return (
+    <CostScope.Provider value={costScope}>
     <div dir="rtl">
       {/* الترويسة */}
       <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200">
@@ -970,5 +976,6 @@ export default function LectureTabs({
         )}
       </div>
     </div>
+    </CostScope.Provider>
   );
 }

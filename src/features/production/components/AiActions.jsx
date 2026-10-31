@@ -31,6 +31,7 @@ import {
 } from "../lib/spellGuards";
 import { API_BASE_URL, PASSWORD } from "../../../config";
 import { learnedForPrompt, recordAccepted } from "../lib/learnedCorrections";
+import { useCostScope } from "../lib/costScope";
 
 // ─── أدوات الذكاء الاصطناعي، قابلة للاستعمال خارج خطّ الإنتاج ─────────────────
 // المواد القديمة (بلا خطة «معدل») تحتاج نفس الأدوات لكن محاضرةً محاضرة، لا
@@ -68,6 +69,7 @@ const Btn = ToolBtn;
 // ─── ١) المسح الضوئي: ملف PDF ← ماركداون ──────────────────────────────────────
 
 export const OcrAction = ({ lectureName, subjectName, onText, onFile }) => {
+  const costScope = useCostScope();
   const [apiKey, setApiKey] = useState(
     () => localStorage.getItem(MISTRAL_KEY_STORE) || "",
   );
@@ -102,6 +104,7 @@ export const OcrAction = ({ lectureName, subjectName, onText, onFile }) => {
         bytes,
         withImages: r2?.ready !== false,
         onStage: setStage,
+        cost: costScope,
       });
       onText(r.markdown, r.stats);
       setOpen(false);
@@ -352,6 +355,7 @@ export const SpellAction = ({
   onReady,
   onFinish,
 }) => {
+  const costScope = useCostScope();
   // حجم الدفعة كما ضبطه المحرِّر — للعرض وحده، والتقسيم يقرأه عند التشغيل
   const [chunkSize, setChunkSize] = useState(CHUNK_LINES);
   const [open, setOpen] = useState(false);
@@ -426,6 +430,7 @@ export const SpellAction = ({
                 text: chunks[i].text,
                 model,
                 learned: learnedForPrompt(),
+                cost: costScope,
               },
               { timeout: CHUNK_TIMEOUT_MS },
             );
@@ -736,6 +741,7 @@ export const SpellAction = ({
 // ─── ٣) توليد البطاقات أو الاختبار التحريري ───────────────────────────────────
 
 export const GenerateAction = ({ kind, text, onItems }) => {
+  const costScope = useCostScope();
   const isFlash = kind === "flash";
   const color = isFlash ? "#10b981" : "#ef4444";
   const [open, setOpen] = useState(false);
@@ -775,6 +781,7 @@ export const GenerateAction = ({ kind, text, onItems }) => {
         model,
         focus,
         count,
+        cost: costScope,
       });
       const items = isFlash ? r.data?.cards || [] : r.data?.questions || [];
       if (!items.length) {
@@ -920,6 +927,7 @@ export const GenerateAction = ({ kind, text, onItems }) => {
 // لذلك المخرَج ماركداون لا نصّاً خاماً — نصٌّ بلا عناوين كتلةٌ لا تُقرأ.
 
 export const TranscribeAction = ({ onText }) => {
+  const costScope = useCostScope();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState(null);
@@ -955,6 +963,7 @@ export const TranscribeAction = ({ onText }) => {
         prompt: prompt.trim() || undefined,
         onStage: setStage,
         onProgress: setProgress,
+        cost: costScope,
       });
       if (r?.truncated) {
         setError(
