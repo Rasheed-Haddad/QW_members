@@ -2,16 +2,14 @@ import {
   AlertCircle,
   CheckSquare,
   Edit,
-  Factory,
   Info,
-  Plus,
   Search,
   Square,
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import {
   add_student_to_exam,
   clearError,
@@ -230,56 +228,6 @@ const ExamsList = () => {
               {exam.questions_count ?? ""}
             </span>
           </div>
-          <div className="flex flex-row gap-2">
-            <input
-              type="text"
-              className="flex-1 border-2 rounded-md border-[#8C52FF] p-2.5 text-sm"
-              value={STUDENT_ID_TO_ADD}
-              onChange={(e) => SET_STUDENT_ID_TO_ADD(e.target.value)}
-              placeholder="إضافة طالب"
-            />
-            <button
-              className={`${
-                STUDENT_ID_TO_ADD == "0000" ? "bg-red-500" : "bg-[#8C52FF]"
-              } flex items-center justify-center rounded-lg px-4 hover:opacity-80 transition-opacity`}
-              onClick={() => {
-                handle_add_student_to_exam({ EXAM_ID: exam._id });
-              }}
-            >
-              <span className="text-white text-sm font-medium">
-                {STUDENT_ID_TO_ADD == "0000" ? "تصفية" : "إضافة"}
-              </span>
-            </button>
-          </div>
-
-          {/* ✅ Checkboxes: مجاني + معدل */}
-          {STUDENT_ID_TO_ADD !== "0000" && (
-            <div className="flex flex-row items-center gap-4">
-              <button
-                className="flex flex-row items-center gap-2 py-2 hover:opacity-70 transition-opacity"
-                onClick={() => set_is_free(!is_free)}
-              >
-                {is_free ? (
-                  <CheckSquare size={20} color="#8C52FF" />
-                ) : (
-                  <Square size={20} color="#9ca3af" />
-                )}
-                <span className="text-sm text-gray-700">مجاني</span>
-              </button>
-              <button
-                className="flex flex-row items-center gap-2 py-2 hover:opacity-70 transition-opacity"
-                onClick={() => set_is_moadal(!is_moadal)}
-                title="اشتراك معدل: يشمل ترفيع + المقرر والفلاش والتحريري والخطة"
-              >
-                {is_moadal ? (
-                  <CheckSquare size={20} color="#10B981" />
-                ) : (
-                  <Square size={20} color="#9ca3af" />
-                )}
-                <span className="text-sm text-gray-700">معدل</span>
-              </button>
-            </div>
-          )}
         </div>
 
         {/* الإجراءات */}
@@ -336,32 +284,6 @@ const ExamsList = () => {
         </div>
       )}
 
-      {/* مساران لإنشاء المادة — كلاهما هنا لأن المادة تُولد من هذه الشاشة:
-          خطّ الإنتاج (من ملف المقرَّر إلى مادة كاملة)، أو مادة فارغة تُملأ يدوياً. */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-3 mb-4 mt-3">
-        <div className="flex flex-col sm:flex-row items-stretch gap-2 w-full sm:w-auto">
-          <Link
-            to="/production"
-            className="bg-[#8C52FF] px-3 sm:px-4 py-2 rounded-md flex flex-row items-center justify-center hover:opacity-80 transition-opacity no-underline"
-            title="من ملف المقرَّر إلى مادة كاملة: مسح ضوئي، تدقيق، ملخص، أسئلة، بطاقات، تحريري"
-          >
-            <Factory size={18} color="#ffffff" style={{ marginLeft: 8 }} />
-            <span className="text-white text-sm sm:text-base">
-              إنتاج مادة جديدة
-            </span>
-          </Link>
-          <Link
-            to="/exams/create"
-            className="border border-gray-300 px-3 sm:px-4 py-2 rounded-md flex flex-row items-center justify-center hover:bg-gray-50 transition-colors no-underline"
-            title="مادة فارغة: الاسم والسعر فقط، ثم تُضاف محاضراتها يدوياً"
-          >
-            <Plus size={18} color="#4b5563" style={{ marginLeft: 8 }} />
-            <span className="text-gray-700 text-sm sm:text-base">
-              مادة فارغة
-            </span>
-          </Link>
-        </div>
-      </div>
     </>
   );
 

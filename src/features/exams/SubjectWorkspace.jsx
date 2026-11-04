@@ -25,7 +25,6 @@ import {
   moadalReady,
 } from "./v2api";
 import LectureTabs from "./LectureTabs";
-import SubjectFieldsPanel from "./SubjectFieldsPanel";
 import BulkProcessor from "./BulkProcessor";
 import BulkReviewHost from "./BulkReviewHost";
 import { openReview, setBulkSavedHandler, usePendingReviews } from "./bulkEngine";
@@ -246,13 +245,8 @@ export default function SubjectWorkspace() {
         </div>
       )}
 
-      {/* بيانات المادة: لوحة تنطوي في مكانها بدل شاشة منفصلة تُفقد السياق */}
-      <div className="px-3 pt-3">
-        <SubjectFieldsPanel
-          subjectId={id}
-          onRenamed={(n) => setSubject((s0) => (s0 ? { ...s0, name: n } : s0))}
-        />
-      </div>
+      {/* «بيانات المادة» (الاسم والأسعار والكلية) من صلاحيات اللوحة وحدها —
+          حفظها في الخادم للّوحة فقط، فلا يُعرض للعضو شريطٌ يُفتح على لا شيء */}
 
       {/* الهوامش مضغوطة والفجوة أصغر: المساحة للمحتوى لا للفراغ.
           وminmax(0,1fr) لا 1fr: المسار الافتراضي min-width:auto فاسمٌ طويل
@@ -280,6 +274,15 @@ export default function SubjectWorkspace() {
               <span className="text-[11px] font-bold text-brand">
                 {lectures.length}
               </span>
+              {Object.keys(pendingReviews).length > 0 && (
+                <span
+                  title={`${Object.keys(pendingReviews).length} تدقيق بانتظار المراجعة`}
+                  className="relative flex h-2.5 w-2.5"
+                >
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+                </span>
+              )}
             </button>
           ) : (
           <>
