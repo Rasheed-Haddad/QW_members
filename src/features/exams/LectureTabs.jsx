@@ -251,6 +251,9 @@ export default function LectureTabs({
   onSaved,
   // تبويبٌ مطلوب صراحةً من الرابط. null = اختر تلقائياً أول جزءٍ فيه محتوى.
   initialTab = null,
+  // يتغيّر حين تحفظ «معالجة كل المحاضرات» شيئاً في هذه المحاضرة بالخلفية:
+  // يُعاد جلبها في مكانها — إلا إن كان فيها تعديلٌ غير محفوظ فيُنبَّه بدل محوه
+  refreshKey = 0,
 }) {
   const [tab, setTab] = useState(initialTab || "curriculum");
   const costScope = useMemo(
@@ -270,6 +273,8 @@ export default function LectureTabs({
   const [dirty, setDirty] = useState(() => new Set());
   const [search, setSearch] = useState("");
   const askedRef = useRef(null);
+  const [stale, setStale] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
   // لقطة الأسئلة قبل «خربطة الأجوبة» — للتراجع بنقرة ما دام لم يُعدَّل
   // شيء بعدها. أي تعديل لاحق يُسقطها: التراجع حينها يمحو ذلك التعديل.
   const [shuffleUndo, setShuffleUndo] = useState(null);
@@ -295,12 +300,20 @@ export default function LectureTabs({
   }, []);
 
   useEffect(() => {
-    const key = `${subjectId}|${lectureId}`;
+    const key = `${subjectId}|${lectureId}|${refreshKey}.${reloadNonce}`;
     if (askedRef.current === key) return;
+    // تحديثٌ للمحاضرة نفسها المفتوحة (لا فتحٌ لغيرها): بلا شاشة تحميل ولا
+    // تبديل تبويب — ولا يمحو تعديلاً لم يُحفظ
+    const isRefresh = Boolean(askedRef.current?.startsWith(`${subjectId}|${lectureId}|`));
     askedRef.current = key;
-    setLoading(true);
+    if (isRefresh && dirty.size > 0) {
+      setStale(true);
+      return;
+    }
+    if (!isRefresh) setLoading(true);
     setError(null);
     setDirty(new Set());
+    setStale(false);
     getLecture(subjectId, lectureId)
       .then((r) => {
         const l = r.lecture || {};
@@ -312,6 +325,7 @@ export default function LectureTabs({
           flash_cards: l.flash_cards || [],
           written_exam: l.written_exam || { duration_min: 30, questions: [] },
         });
+        if (isRefresh) return;
         // تبويبٌ طلبه المستخدم صراحةً يُحترَم؛ وإلا نفتح على أول جزء فيه
         // شيء — الهبوط على فارغٍ يوحي بأن الكل فارغ.
         if (initialTab) {
@@ -331,7 +345,8 @@ export default function LectureTabs({
         setError(e?.response?.data?.message || "تعذّر جلب المحاضرة"),
       )
       .finally(() => setLoading(false));
-  }, [subjectId, lectureId, initialTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subjectId, lectureId, initialTab, refreshKey, reloadNonce]);
 
   // تحذير المغادرة بتغييرات غير محفوظة
   useEffect(() => {
@@ -447,6 +462,23 @@ export default function LectureTabs({
   return (
     <CostScope.Provider value={costScope}>
     <div dir="rtl">
+      {stale && (
+        <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-800 flex items-center gap-3 flex-wrap">
+          <span className="flex-1 min-w-[200px]">
+            حُفظ في هذه المحاضرة محتوى جديد من «معالجة كل المحاضرات» ولديك تعديلات غير
+            محفوظة — احفظها أولاً، أو أعد التحميل لترى الجديد.
+          </span>
+          <button
+            onClick={() => {
+              setDirty(new Set());
+              setReloadNonce((n) => n + 1);
+            }}
+            className="rounded-lg border border-amber-300 bg-white px-3 py-1 font-semibold hover:bg-amber-100"
+          >
+            أعد التحميل (تُفقد التعديلات)
+          </button>
+        </div>
+      )}
       {/* الترويسة */}
       <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200">
         <div className="px-4 py-3 flex items-center gap-3 flex-wrap">

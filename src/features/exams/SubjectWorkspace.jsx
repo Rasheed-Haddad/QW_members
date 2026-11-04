@@ -27,6 +27,8 @@ import {
 import LectureTabs from "./LectureTabs";
 import SubjectFieldsPanel from "./SubjectFieldsPanel";
 import BulkProcessor from "./BulkProcessor";
+import BulkReviewHost from "./BulkReviewHost";
+import { openReview, setBulkSavedHandler, usePendingReviews } from "./bulkEngine";
 import CourseExtractAction from "./CourseExtractAction";
 import SplitPdfAction from "../production/components/SplitPdfAction";
 
@@ -58,6 +60,10 @@ export default function SubjectWorkspace() {
   const [renaming, setRenaming] = useState(null);
   // يتغيّر حين تحفظ «معالجة كل المحاضرات» محاضرةً — يعيد فتح المعروضة بمحتواها الجديد
   const [tabsVersion, setTabsVersion] = useState(0);
+  // حفظٌ بالخلفية من «معالجة كل المحاضرات» لكل محاضرة — تُحدَّث المفتوحة في مكانها
+  const [bgSaved, setBgSaved] = useState({});
+  // تدقيقٌ انتهى بالخلفية وينتظر مراجعتك — علامةٌ نابضة بجانب اسم المحاضرة
+  const pendingReviews = usePendingReviews(id);
 
   const load = useCallback(
     async (keep = true) => {
@@ -87,6 +93,15 @@ export default function SubjectWorkspace() {
   useEffect(() => {
     load(false);
   }, [load]);
+
+  useEffect(
+    () =>
+      setBulkSavedHandler(id, (lid) => {
+        load();
+        setBgSaved((m) => ({ ...m, [lid]: (m[lid] || 0) + 1 }));
+      }),
+    [id, load],
+  );
 
   const doAdd = async () => {
     const n = newName.trim();
@@ -193,15 +208,8 @@ export default function SubjectWorkspace() {
 
         {/* أدوات المقرَّر كاملاً لا محاضرةٍ واحدة: التقسيم ثم المعالجة الشاملة */}
         <SplitPdfAction />
-        <BulkProcessor
-          subjectId={id}
-          subjectName={subject?.name}
-          lectures={lectures}
-          onLectureSaved={(lid) => {
-            load();
-            if (lid === selected) setTabsVersion((v) => v + 1);
-          }}
-        />
+        <BulkProcessor subjectId={id} subjectName={subject?.name} lectures={lectures} />
+        <BulkReviewHost subjectId={id} subjectName={subject?.name} />
         <CourseExtractAction
           subjectId={id}
           lectures={lectures}
@@ -380,6 +388,21 @@ export default function SubjectWorkspace() {
                         {l.name || "بلا اسم"}
                       </span>
                     )}
+                    {pendingReviews[l.lecture_id] && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openReview(id, l.lecture_id);
+                        }}
+                        title={`نتائج تدقيق بانتظار مراجعتك (${pendingReviews[l.lecture_id].count}) — انقر للمراجعة`}
+                        className="p-1 shrink-0"
+                      >
+                        <span className="relative flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+                        </span>
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -432,6 +455,7 @@ export default function SubjectWorkspace() {
                 subjectName={subject?.name}
                 lectureId={selected}
                 initialTab={selected === wantLecture ? wantTab : null}
+                refreshKey={bgSaved[selected] || 0}
                 onSaved={() => load()}
               />
             </div>

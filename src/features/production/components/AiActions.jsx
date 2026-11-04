@@ -32,6 +32,7 @@ import {
 import { API_BASE_URL, PASSWORD } from "../../../config";
 import { learnedForPrompt, recordAccepted } from "../lib/learnedCorrections";
 import { useCostScope } from "../lib/costScope";
+import { getFocusDefault, setFocusDefault } from "../lib/focusDefaults";
 
 // ─── أدوات الذكاء الاصطناعي، قابلة للاستعمال خارج خطّ الإنتاج ─────────────────
 // المواد القديمة (بلا خطة «معدل») تحتاج نفس الأدوات لكن محاضرةً محاضرة، لا
@@ -342,9 +343,98 @@ const SpellRow = memo(function SpellRow({ c, text, onField, muted }) {
   );
 });
 
+/**
+ * التدقيق بلا واجهة: يقسّم النصّ دفعاتٍ ويرسلها بالترتيب، والدفعة الفاشلة
+ * تُعاد كل RETRY_WAIT_S ثانية حتى تنجح (الإلغاء وحده يوقفها).
+ * تستعمله نافذة التدقيق، و«معالجة كل المحاضرات» في الخلفية.
+ *
+ * onProgress({ done, total, retry? }) · isCancelled() → bool
+ * يعيد { raw, stoppedAt, total } — stoppedAt رقم الدفعة التي أُلغي عندها أو null.
+ * يرمي إن أُلغي قبل أن تعود دفعةٌ واحدة.
+ */
+export const runSpellcheck = async (
+  text,
+  { model = DEFAULT_GEMINI_MODEL, cost = null, onProgress, isCancelled = () => false } = {},
+) => {
+  const chunks = buildChunks(text, await chunkLines());
+  const raw = [];
+  let stoppedAt = null;
+  for (let i = 0; i < chunks.length; i++) {
+    if (isCancelled()) {
+      stoppedAt = i;
+      break;
+    }
+    onProgress?.({ done: i, total: chunks.length });
+    let attempt = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const r = await axios.post(
+          `${API_BASE_URL}/production/spellcheck`,
+          {
+            PASSWORD,
+            text: chunks[i].text,
+            model,
+            learned: learnedForPrompt(),
+            cost,
+          },
+          { timeout: CHUNK_TIMEOUT_MS },
+        );
+        raw.push(...(r.data?.corrections || []));
+        break;
+      } catch (e) {
+        attempt += 1;
+        const reason =
+          e?.code === "ECONNABORTED"
+            ? `تجاوزت ${CHUNK_TIMEOUT_MS / 1000} ثانية بلا ردّ`
+            : e?.response?.data?.message ||
+              (e?.response ? `خطأ ${e.response.status}` : "تعذّر الاتصال");
+        // مهلة الحصّة إن طلبها الخادم وكانت معقولة، وإلا ست ثوانٍ
+        const asked = Number(e?.response?.data?.retryAfter) || 0;
+        const wait =
+          asked > RETRY_WAIT_S && asked <= MAX_QUOTA_WAIT_S ? asked : RETRY_WAIT_S;
+        // عدٌّ تنازليّ مرئي: الانتظار الصامت لا يُفرَّق عن التعليق
+        for (let s = wait; s > 0; s--) {
+          if (isCancelled()) break;
+          onProgress?.({ done: i, total: chunks.length, retry: { attempt, reason, seconds: s } });
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r2) => setTimeout(r2, 1000));
+        }
+        if (isCancelled()) break;
+        onProgress?.({ done: i, total: chunks.length });
+      }
+    }
+    if (isCancelled()) {
+      stoppedAt = i;
+      break;
+    }
+    if (i < chunks.length - 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r2) => setTimeout(r2, WAIT_BETWEEN_CHUNKS));
+    }
+  }
+  // أُلغي قبل أن يعود شيء: لا تقرير يُراجَع
+  if (stoppedAt !== null && raw.length === 0) {
+    throw new Error(`أُلغي التدقيق عند الدفعة ${stoppedAt + 1} من ${chunks.length}`);
+  }
+  return { raw, stoppedAt, total: chunks.length };
+};
+
+/** تقرير المراجعة من التصحيحات الخام — on: يُطبَّق افتراضياً · learn: باختيارك */
+export const buildSpellReport = (raw, text) => {
+  const { accepted, rejected } = screenCorrections(raw, text);
+  return {
+    accepted: accepted.map((c, i) => ({ ...c, key: `a${i}`, on: true, learn: false })),
+    rejected: rejected.map((c, i) => ({ ...c, key: `r${i}`, on: false, learn: false })),
+  };
+};
+
 // autoRunKey/hideTrigger/onReady/onFinish: للتشغيل من «معالجة كل المحاضرات»
 // — يبدأ التدقيق وحده بالنموذج الافتراضي، ويُبلغ حين تجهز التصحيحات
 // (onReady) وحين تُطبَّق أو تُغلَق النافذة بلا تطبيق (onFinish(applied)).
+// preset: تصحيحات خام جاهزة (دُقِّقت في الخلفية) — تُفتح المراجعة بها مباشرةً
+// بلا تدقيقٍ جديد. allowApplyNone: «طبّق» متاح ولو بلا تصحيح مختار (متابعة).
 export const SpellAction = ({
   text,
   onText,
@@ -354,6 +444,8 @@ export const SpellAction = ({
   hideTrigger = false,
   onReady,
   onFinish,
+  preset = null,
+  allowApplyNone = false,
 }) => {
   const costScope = useCostScope();
   // حجم الدفعة كما ضبطه المحرِّر — للعرض وحده، والتقسيم يقرأه عند التشغيل
@@ -403,99 +495,19 @@ export const SpellAction = ({
     setError(null);
     setReport(null);
     cancelRef.current = false;
-    const chunks = buildChunks(text, await chunkLines());
-    const raw = [];
-    // ── الدفعة الفاشلة لا تُلغي ما قبلها ──
-    // كان أيّ خطأ (مهلة، شبكة، 5xx، حصّة) يرمي فيضيع كل ما دُقِّق: تدقيقٌ من
-    // ثلاثين دفعة يفشل في السادسة والعشرين فيُعاد من أوّله ويُدفع ثمنه مرتين.
-    // الآن الدفعة نفسها تُعاد كل RETRY_WAIT_S ثانية حتى تنجح، والإلغاء وحده
-    // يوقفها — وحتى الإلغاء يُبقي ما سبق قابلاً للمراجعة.
-    let stoppedAt = null; // رقم الدفعة التي أُلغي عندها (إن أُلغي)
     try {
-      for (let i = 0; i < chunks.length; i++) {
-        if (cancelRef.current) {
-          stoppedAt = i;
-          break;
-        }
-        setProgress({ done: i, total: chunks.length });
-        let attempt = 0;
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            const r = await axios.post(
-              `${API_BASE_URL}/production/spellcheck`,
-              {
-                PASSWORD,
-                text: chunks[i].text,
-                model,
-                learned: learnedForPrompt(),
-                cost: costScope,
-              },
-              { timeout: CHUNK_TIMEOUT_MS },
-            );
-            raw.push(...(r.data?.corrections || []));
-            break;
-          } catch (e) {
-            attempt += 1;
-            const reason =
-              e?.code === "ECONNABORTED"
-                ? `تجاوزت ${CHUNK_TIMEOUT_MS / 1000} ثانية بلا ردّ`
-                : e?.response?.data?.message ||
-                  (e?.response ? `خطأ ${e.response.status}` : "تعذّر الاتصال");
-            // مهلة الحصّة إن طلبها الخادم وكانت معقولة، وإلا ست ثوانٍ
-            const asked = Number(e?.response?.data?.retryAfter) || 0;
-            const wait =
-              asked > RETRY_WAIT_S && asked <= MAX_QUOTA_WAIT_S ? asked : RETRY_WAIT_S;
-            // عدٌّ تنازليّ مرئي: الانتظار الصامت لا يُفرَّق عن التعليق
-            for (let s = wait; s > 0; s--) {
-              if (cancelRef.current) break;
-              setProgress({
-                done: i,
-                total: chunks.length,
-                retry: { attempt, reason, seconds: s },
-              });
-              // eslint-disable-next-line no-await-in-loop
-              await new Promise((r2) => setTimeout(r2, 1000));
-            }
-            if (cancelRef.current) break;
-            setProgress({ done: i, total: chunks.length });
-          }
-        }
-        if (cancelRef.current) {
-          stoppedAt = i;
-          break;
-        }
-        if (i < chunks.length - 1) {
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise((r2) => setTimeout(r2, WAIT_BETWEEN_CHUNKS));
-        }
-      }
-      // أُلغي قبل أن يعود شيء: لا تقرير يُراجَع
-      if (stoppedAt !== null && raw.length === 0) {
-        throw new Error(`أُلغي التدقيق عند الدفعة ${stoppedAt + 1} من ${chunks.length}`);
-      }
+      const { raw, stoppedAt, total } = await runSpellcheck(text, {
+        model,
+        cost: costScope,
+        onProgress: setProgress,
+        isCancelled: () => cancelRef.current,
+      });
       if (stoppedAt !== null) {
         setError(
-          `أُلغي عند الدفعة ${stoppedAt + 1} من ${chunks.length} — المعروض تصحيحات الدفعات المكتملة وحدها`,
+          `أُلغي عند الدفعة ${stoppedAt + 1} من ${total} — المعروض تصحيحات الدفعات المكتملة وحدها`,
         );
       }
-      const { accepted, rejected } = screenCorrections(raw, text);
-      setReport({
-        // on: يُطبَّق افتراضياً · learn: لا يدخل السجلّ إلا باختيارك
-        accepted: accepted.map((c, i) => ({
-          ...c,
-          key: `a${i}`,
-          on: true,
-          learn: false,
-        })),
-        rejected: rejected.map((c, i) => ({
-          ...c,
-          key: `r${i}`,
-          on: false,
-          learn: false,
-        })),
-      });
+      setReport(buildSpellReport(raw, text));
     } catch (e) {
       setError(e?.response?.data?.message || e.message);
     } finally {
@@ -542,13 +554,21 @@ export const SpellAction = ({
   // التشغيل الآلي: يبدأ فور توفّر النموذج، مرةً واحدة لكل مفتاح
   const autoRanRef = useRef(null);
   useEffect(() => {
-    if (!autoRunKey || !model || autoRanRef.current === autoRunKey) return;
+    if (!autoRunKey || autoRanRef.current === autoRunKey) return;
+    if (preset) {
+      autoRanRef.current = autoRunKey;
+      setOpen(true);
+      setError(null);
+      setReport(buildSpellReport(preset, text));
+      return;
+    }
+    if (!model) return;
     autoRanRef.current = autoRunKey;
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRunKey, model]);
   useEffect(() => {
-    if (report && autoRunKey) onReady?.();
+    if (report && autoRunKey && !preset) onReady?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report]);
 
@@ -713,10 +733,13 @@ export const SpellAction = ({
               </button>
               <button
                 onClick={apply}
-                disabled={chosen.length === 0}
+                disabled={chosen.length === 0 && !(allowApplyNone && report)}
                 className="mr-auto bg-brand text-white text-sm font-bold rounded-xl px-6 py-2.5 disabled:opacity-40 flex items-center gap-2"
               >
-                <Check size={16} /> طبّق {chosen.length} تصحيحاً
+                <Check size={16} />{" "}
+                {chosen.length === 0 && allowApplyNone
+                  ? "تابع بلا تصحيحات"
+                  : `طبّق ${chosen.length} تصحيحاً`}
               </button>
             </div>
           </div>
@@ -749,11 +772,15 @@ export const GenerateAction = ({ kind, text, onItems }) => {
   const [error, setError] = useState(null);
   const [models, setModels] = useState([]);
   const [model, setModel] = useState("");
-  const [focus, setFocus] = useState(
-    isFlash
-      ? "قلل الأرقام والنسب وركز على المعلومات المهمة"
-      : "تعداد, شرح, مقارنة",
-  );
+  const [focus, setFocus] = useState(() => getFocusDefault(kind));
+  // «تجديد»: ما في الحقل يصير المبدئي في المرات القادمة
+  const [focusSaved, setFocusSaved] = useState(false);
+  const renewFocus = () => {
+    if (setFocusDefault(kind, focus)) {
+      setFocusSaved(true);
+      setTimeout(() => setFocusSaved(false), 1800);
+    }
+  };
   const [count, setCount] = useState(isFlash ? 35 : 12);
 
   useEffect(() => {
@@ -888,6 +915,15 @@ export const GenerateAction = ({ kind, text, onItems }) => {
                 placeholder="مثلاً: التصنيفات والأرقام"
                 className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-brand"
               />
+              <button
+                type="button"
+                onClick={renewFocus}
+                disabled={focus === getFocusDefault(kind)}
+                title="احفظ ما في الحقل ليُملأ به تلقائياً في المرات القادمة"
+                className="mt-1 text-[11px] text-brand hover:underline disabled:text-gray-300 disabled:no-underline"
+              >
+                {focusSaved ? "✓ حُفظ — سيُملأ به الحقل من الآن" : "تجديد"}
+              </button>
             </label>
 
             {error && (
