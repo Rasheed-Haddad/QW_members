@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import axios from "axios";
+import { API_BASE_URL, PASSWORD } from "../../config";
 import { createPortal } from "react-dom";
 import {
   Workflow,
@@ -46,6 +48,15 @@ import {
 // كل خطوة تُطفأ لمحاضرةٍ بعينها أو للكل من رأس عمودها.
 
 const MISTRAL_KEY_STORE = "mistral_api_key";
+// نموذجا Gemini المختاران — يُتذكَّران في هذا الجهاز
+const GEMINI_PREFS_STORE = "bulk_gemini_models_v1";
+const readGeminiPrefs = () => {
+  try {
+    return JSON.parse(localStorage.getItem(GEMINI_PREFS_STORE) || "{}") || {};
+  } catch {
+    return {};
+  }
+};
 
 // القيم المبدئية نفسها في نوافذ التوليد المفردة — موضوع التركيز كما جُدِّد
 // آخر مرة من زرّ «تجديد» (يُقرأ عند فتح النافذة لا عند تحميل الصفحة)
@@ -92,6 +103,9 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
   const [rows, setRows] = useState([]);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(MISTRAL_KEY_STORE) || "");
   const [unmatched, setUnmatched] = useState([]);
+  const [geminiModels, setGeminiModels] = useState([]);
+  const [spellModel, setSpellModel] = useState(() => readGeminiPrefs().spell || DEFAULT_GEMINI_MODEL);
+  const [genModel, setGenModel] = useState(() => readGeminiPrefs().gen || DEFAULT_GEMINI_MODEL);
 
   const status = useClaudeStatus();
   const prefs = useClaudePrefs(status);
@@ -101,6 +115,28 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
   useEffect(() => {
     if (apiKey) localStorage.setItem(MISTRAL_KEY_STORE, apiKey);
   }, [apiKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(GEMINI_PREFS_STORE, JSON.stringify({ spell: spellModel, gen: genModel }));
+    } catch {
+      /* لا تخزين — يبقى الاختيار لهذه الجلسة */
+    }
+  }, [spellModel, genModel]);
+
+  // قائمة النماذج من حساب Gemini نفسه — تُجلب عند أول فتحٍ للإعداد
+  useEffect(() => {
+    if (!open || phase !== "setup" || geminiModels.length) return;
+    axios
+      .post(`${API_BASE_URL}/production/gemini-models`, { PASSWORD })
+      .then((r) => setGeminiModels(r.data?.models || []))
+      .catch(() => setGeminiModels([]));
+  }, [open, phase, geminiModels.length]);
+  // المختار يظهر في القائمة دائماً حتى إن لم يُرجعه الحساب
+  const modelOptions = useMemo(
+    () => [...new Set([DEFAULT_GEMINI_MODEL, spellModel, genModel, ...geminiModels])],
+    [geminiModels, spellModel, genModel],
+  );
 
   const order = view.order || [];
   const jobsView = view.jobs || {};
@@ -198,7 +234,7 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
       subjectId,
       subjectName,
       apiKey: apiKey.trim(),
-      cfg: { model: prefs.model, effort: prefs.effort, mode: prefs.mode },
+      cfg: { model: prefs.model, effort: prefs.effort, mode: prefs.mode, spellModel, genModel },
       jobs: jobs.map((j) => ({
         lecture_id: j.lecture_id,
         name: j.name,
@@ -301,6 +337,26 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
                   />
                 </label>
                 <ClaudeModelPicker status={status} prefs={prefs} />
+                {[
+                  ["Gemini — التدقيق", spellModel, setSpellModel],
+                  ["Gemini — البطاقات والتحريري", genModel, setGenModel],
+                ].map(([label, value, set]) => (
+                  <label key={label} className="flex flex-col gap-1 text-xs text-gray-500">
+                    {label}
+                    <select
+                      value={value}
+                      onChange={(e) => set(e.target.value)}
+                      dir="ltr"
+                      className="border border-gray-300 rounded-lg p-2 text-sm bg-white min-w-[12rem]"
+                    >
+                      {modelOptions.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
                 <label className="cursor-pointer text-sm font-semibold text-brand border border-brand/30 bg-white rounded-lg px-3 py-2 flex items-center gap-1.5">
                   <Files size={15} /> اختيار ملفات متعددة
                   <input
@@ -316,8 +372,8 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
                   />
                 </label>
                 <p className="text-[11px] text-gray-400 max-w-xs">
-                  الملفات المتعددة تُطابَق بأسماء المحاضرات تلقائياً. التدقيق والبطاقات والتحريري بـ{" "}
-                  {DEFAULT_GEMINI_MODEL}. أطفئ «مسح» لمحاضرةٍ ليُستعمل نصّها المحفوظ.
+                  الملفات المتعددة تُطابَق بأسماء المحاضرات تلقائياً. أطفئ «مسح» لمحاضرةٍ ليُستعمل
+                  نصّها المحفوظ.
                 </p>
               </div>
               {claudeReason && (

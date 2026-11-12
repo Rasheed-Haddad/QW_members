@@ -282,7 +282,7 @@ export default function CourseExtractAction({ subjectId, lectures, onSaved }) {
 
             <div className="flex-1 flex min-h-0">
               {/* العناصر — يمين */}
-              <div className="w-[55%] min-w-0 flex flex-col border-l border-gray-200">
+              <div className="w-[38%] min-w-0 flex flex-col border-l border-gray-200">
                 {(stage || error || saved) && (
                   <div className="px-4 pt-3 space-y-2">
                     {stage && (
@@ -471,7 +471,7 @@ export default function CourseExtractAction({ subjectId, lectures, onSaved }) {
               </div>
 
               {/* الملف نفسه — يسار، للمقارنة بخط اليد */}
-              <div className="w-[45%] min-w-0 h-full bg-gray-100">
+              <div className="w-[62%] min-w-0 h-full bg-gray-100">
                 {bytes ? (
                   <PdfPane bytes={bytes} title="ملف الدورة" />
                 ) : imgUrl ? (

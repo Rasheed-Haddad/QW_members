@@ -181,7 +181,7 @@ export const bulkBytes = (sid, lid) => runs[sid]?.bytes?.[lid] || null;
 const costOf = (sid, lid) => ({ exam_id: sid, lecture_id: lid });
 
 /** توليد بطاقات أو تحريري بـGemini — يُعاد عند الفشل حتى خمس مرات */
-const geminiGenerate = async (kind, text, focus, count, signal, cost) => {
+const geminiGenerate = async (kind, text, focus, count, signal, cost, model) => {
   for (let attempt = 1; ; attempt++) {
     try {
       // eslint-disable-next-line no-await-in-loop
@@ -189,7 +189,7 @@ const geminiGenerate = async (kind, text, focus, count, signal, cost) => {
         PASSWORD,
         kind,
         text,
-        model: DEFAULT_GEMINI_MODEL,
+        model: model || DEFAULT_GEMINI_MODEL,
         focus,
         count: Number(count),
         cost,
@@ -263,6 +263,7 @@ const spellStage = async (sid, lid, text) => {
   setStep(sid, lid, "spell", "run");
   try {
     const { raw } = await runSpellcheck(text, {
+      model: run.cfg.spellModel || DEFAULT_GEMINI_MODEL,
       cost: costOf(sid, lid),
       onProgress: (p) =>
         patchJob(sid, lid, {
@@ -340,7 +341,7 @@ const runChain = async (sid, lid, text, only = null) => {
   const gemini = (async () => {
     if (on("flash")) {
       await runStep(sid, lid, "flash", async () => {
-        const cards = await geminiGenerate("flash", text, job.flashFocus, job.flashCount, run.signal, cost);
+        const cards = await geminiGenerate("flash", text, job.flashFocus, job.flashCount, run.signal, cost, run.cfg.genModel);
         await saveLecture(sid, lid, {
           flash_cards: cards.map((c, i) => ({ card_id: `${lid}_ai${i + 1}`, front: c.front, back: c.back })),
         });
@@ -348,7 +349,7 @@ const runChain = async (sid, lid, text, only = null) => {
     }
     if (on("written")) {
       await runStep(sid, lid, "written", async () => {
-        const qs = await geminiGenerate("written", text, job.writtenFocus, job.writtenCount, run.signal, cost);
+        const qs = await geminiGenerate("written", text, job.writtenFocus, job.writtenCount, run.signal, cost, run.cfg.genModel);
         await saveLecture(sid, lid, {
           written_exam: {
             duration_min: 30,
@@ -421,7 +422,7 @@ const refreshActive = (sid) =>
 /**
  * jobs: [{ lecture_id, name, file?, steps:{ocr,spell,summary,mcq,flash,written},
  *          flashFocus, flashCount, writtenFocus, writtenCount, mcqCount }]
- * cfg: { model, effort, mode } لـClaude
+ * cfg: { model, effort, mode } لـClaude · { spellModel, genModel } لـGemini
  */
 export const startBulk = ({ subjectId: sid, subjectName, jobs, cfg, apiKey }) => {
   const run = {

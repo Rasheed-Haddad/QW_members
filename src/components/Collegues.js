@@ -113,10 +113,12 @@ export const Colleges = {
     { id: "51", name: "الهندسة المعلوماتية", universityId: "8" },
     { id: "52", name: "الهندسة المدنية", universityId: "8" },
     { id: "53", name: "الهندسة المعمارية", universityId: "8" },
-    { id: "54", name: "التجميل", universityId: "8" },
+    { id: "54", name: "العناية بالبشرة", universityId: "8" },
     { id: "55", name: "الحقوق", universityId: "8" },
     { id: "56", name: "ريادة الأعمال", universityId: "8" },
     { id: "57", name: "الإعلام", universityId: "8" },
+    // التغذية برمز 500 خارج التسلسل (كان رمزها في الموقع قبل دمجها المؤقت في «التجميل»)
+    { id: "500", name: "التغذية", universityId: "8" },
   ],
   9: [
     { id: "58", name: "الحقوق", universityId: "9" },
