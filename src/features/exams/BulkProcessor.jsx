@@ -50,6 +50,8 @@ import {
 const MISTRAL_KEY_STORE = "mistral_api_key";
 // نموذجا Gemini المختاران — يُتذكَّران في هذا الجهاز
 const GEMINI_PREFS_STORE = "bulk_gemini_models_v1";
+// مراجعة التدقيق قبل التوليد؟ — تُتذكَّر في هذا الجهاز
+const REVIEW_STORE = "bulk_review_spell_v1";
 const readGeminiPrefs = () => {
   try {
     return JSON.parse(localStorage.getItem(GEMINI_PREFS_STORE) || "{}") || {};
@@ -106,6 +108,20 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
   const [geminiModels, setGeminiModels] = useState([]);
   const [spellModel, setSpellModel] = useState(() => readGeminiPrefs().spell || DEFAULT_GEMINI_MODEL);
   const [genModel, setGenModel] = useState(() => readGeminiPrefs().gen || DEFAULT_GEMINI_MODEL);
+  const [reviewSpell, setReviewSpell] = useState(() => {
+    try {
+      return localStorage.getItem(REVIEW_STORE) !== "0";
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(REVIEW_STORE, reviewSpell ? "1" : "0");
+    } catch {
+      /* لا تخزين */
+    }
+  }, [reviewSpell]);
 
   const status = useClaudeStatus();
   const prefs = useClaudePrefs(status);
@@ -234,7 +250,7 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
       subjectId,
       subjectName,
       apiKey: apiKey.trim(),
-      cfg: { model: prefs.model, effort: prefs.effort, mode: prefs.mode, spellModel, genModel },
+      cfg: { model: prefs.model, effort: prefs.effort, mode: prefs.mode, spellModel, genModel, reviewSpell },
       jobs: jobs.map((j) => ({
         lecture_id: j.lecture_id,
         name: j.name,
@@ -357,6 +373,21 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
                     </select>
                   </label>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => setReviewSpell((v) => !v)}
+                  title={
+                    reviewSpell
+                      ? "التصحيحات تنتظر مراجعتك قبل التوليد"
+                      : "التصحيحات المقبولة تُطبَّق فور انتهاء التدقيق، والتوليد يبدأ مباشرةً"
+                  }
+                  className={`text-sm font-semibold rounded-lg px-3 py-2 flex items-center gap-1.5 border ${
+                    reviewSpell ? "border-amber-300 bg-amber-50 text-amber-800" : "border-green-300 bg-green-50 text-green-800"
+                  }`}
+                >
+                  {reviewSpell ? <CheckSquare size={15} /> : <Square size={15} />}
+                  {reviewSpell ? "مراجعة التدقيق قبل التوليد" : "تطبيق التدقيق آلياً بلا مراجعة"}
+                </button>
                 <label className="cursor-pointer text-sm font-semibold text-brand border border-brand/30 bg-white rounded-lg px-3 py-2 flex items-center gap-1.5">
                   <Files size={15} /> اختيار ملفات متعددة
                   <input
@@ -625,8 +656,11 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
                   <span className="font-semibold text-gray-700">{jobs.length} محاضرة ستُعالَج</span>
                   {skipped > 0 && ` · ${skipped} مشمولة ستُتخطّى (انظر سببها)`}
                   {excludedCount > 0 && ` · ${excludedCount} مستثناة`}
-                  {" — "}المسح والتدقيق بالخلفية؛ حين يجهز تدقيق محاضرة تسمع تنبيهاً وتنبض علامةٌ
-                  بجانب اسمها. بعد «طبّق» يبدأ توليدها ويُحفظ كلُّ جزءٍ فور جاهزيته.
+                  {" — "}المسح والتدقيق بالخلفية (يبدأ تدقيق كل محاضرة لحظة انتهاء مسحها).{" "}
+                  {reviewSpell
+                    ? "حين يجهز تدقيق محاضرة تسمع تنبيهاً وتنبض علامةٌ بجانب اسمها، وبعد «طبّق» يبدأ توليدها."
+                    : "التصحيحات المقبولة تُطبَّق آلياً ويبدأ التوليد فوراً — بلا مراجعة."}{" "}
+                  كلُّ جزءٍ يُحفظ فور جاهزيته.
                 </p>
                 <button
                   onClick={start}

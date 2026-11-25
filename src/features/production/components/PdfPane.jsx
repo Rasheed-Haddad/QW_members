@@ -70,9 +70,9 @@ export default function PdfPane({
   // التحويل إليه بضغطة بدل أن يبقى المستخدم أمام نصٍّ لا يُقرأ.
   // `forceNative` رغبةٌ لا أمر: إن عجز المتصفّح عن العرض الداخلي فالشبكة
   // أصدق من إطارٍ أسود.
-  // العارض هو الافتراضي في كل مكان (المقارنة قراءةٌ للورق قبل كل شيء)،
-  // والشبكة بزرٍّ لمن يحتاج التكبير الدقيق
-  const [native, setNative] = useState(canInlinePdf);
+  // العارض وحده في كل مكان — لا شبكة صفحات ولا زرّ تحويل إليها. رسم الصفحات
+  // صوراً يبقى فقط حيث يعجز المتصفّح عن العرض الداخلي (متصفّحات الموبايل).
+  const [native] = useState(canInlinePdf);
   const [blobUrl, setBlobUrl] = useState("");
 
   useEffect(() => {
@@ -169,24 +169,6 @@ export default function PdfPane({
           <span className="text-[11px] text-gray-400">
             {pdf.numPages} صفحة
           </span>
-        )}
-        {(!forceNative || !canInlinePdf) && canInlinePdf && (
-        <button
-          onClick={() => setNative((v) => !v)}
-          title={
-            native
-              ? "عد إلى شبكة الصفحات (تكبير وتحكّم أدقّ)"
-              : "افتحه بعارض المتصفّح — أصلب مع الملفات ذات الترميز التالف"
-          }
-          className={`text-[11px] font-semibold rounded-lg px-2 py-1 flex items-center gap-1 border ${
-            native
-              ? "bg-brand text-white border-transparent"
-              : "bg-brand/10 text-brand border-brand/20"
-          }`}
-        >
-          {native ? <Layers size={12} /> : <MonitorPlay size={12} />}
-          {native ? "شبكة" : "عارض"}
-        </button>
         )}
         {!canInlinePdf && (
           <span

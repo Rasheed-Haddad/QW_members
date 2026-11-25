@@ -6,6 +6,7 @@ import { DEFAULT_GEMINI_MODEL, runSpellcheck, buildSpellReport } from "../produc
 import { scanLecture, checkR2 } from "../production/lib/mistralOcr";
 import { generateMcq, generateSummary, claudeError } from "../production/lib/claudeRun";
 import { parsePastedQuestions } from "../production/lib/parseQuestions";
+import { applyCorrections } from "../production/lib/spellGuards";
 
 // ─── محرّك «معالجة كل المحاضرات» ──────────────────────────────────────────────
 // يعيش خارج أي مكوّن: إغلاق النافذة أو التنقّل بين المحاضرات لا يوقفه، ولا
@@ -38,6 +39,34 @@ const PENDING_KEY = "bulk_spell_pending_v1";
 const EMPTY = Object.freeze({});
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ─── التدقيق بالتوازي ─────────────────────────────────────────────────────────
+// يبدأ تدقيق كل محاضرة لحظة انتهاء مسحها، لا بعد انتهاء تدقيق ما قبلها.
+// السقف يقي حدود Gemini من الإغراق: الدفعة الفاشلة تُعاد على أي حال، لكن
+// عشرون تدقيقاً معاً تقضي الوقت في الانتظار لا في العمل.
+const SPELL_CONCURRENCY = 5;
+const makeLimiter = (max) => {
+  let running = 0;
+  const queue = [];
+  const next = () => {
+    if (running >= max || !queue.length) return;
+    running += 1;
+    const { fn, resolve } = queue.shift();
+    Promise.resolve()
+      .then(fn)
+      .catch(() => {})
+      .finally(() => {
+        running -= 1;
+        resolve();
+        next();
+      });
+  };
+  return (fn) =>
+    new Promise((resolve) => {
+      queue.push({ fn, resolve });
+      next();
+    });
+};
 
 // تنبيه صوتي بلا ملفّات: نغمتان لتدقيقٍ جاهز، وثلاثٌ صاعدة لمحاضرةٍ اكتملت
 export const beep = (kind) => {
@@ -273,11 +302,29 @@ const spellStage = async (sid, lid, text) => {
         }),
       isCancelled: () => run.signal.cancelled,
     });
-    const count = buildSpellReport(raw, text).accepted.length;
+    const report = buildSpellReport(raw, text);
+    const count = report.accepted.length;
     patchJob(sid, lid, { note: "" });
     if (!count) {
       setStep(sid, lid, "spell", "done");
       runChain(sid, lid, text);
+      return;
+    }
+    // بلا مراجعة: المقبول يُطبَّق فور انتهاء التدقيق ويُحفظ، ثم التوليد مباشرةً.
+    // المرفوض بالحرّاس لا يُطبَّق — هو ما كانت المراجعة ستعرضه مطفأً.
+    if (run.cfg.reviewSpell === false) {
+      const chosen = report.accepted.filter(
+        (c) => c.on && String(c.after || "").trim() && c.after !== c.before,
+      );
+      const finalText = chosen.length ? applyCorrections(text, chosen).text : text;
+      if (finalText !== text) {
+        patchJob(sid, lid, { note: `حفظ النص بعد ${chosen.length} تصحيحاً آلياً…` });
+        await saveLecture(sid, lid, { curriculum: { text: finalText } });
+        saved(sid, lid);
+      }
+      setStep(sid, lid, "spell", "done");
+      patchJob(sid, lid, { note: "" });
+      runChain(sid, lid, finalText);
       return;
     }
     setPending(sid, lid, {
@@ -487,23 +534,16 @@ export const startBulk = ({ subjectId: sid, subjectName, jobs, cfg, apiKey }) =>
     }
   })();
 
-  // التدقيق: بالترتيب على ما انتهى مسحه، والتوليد يبدأ وحده بعد المراجعة
-  (async () => {
-    for (let i = 0; i < ids.length; i++) {
-      let text;
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        text = await texts[i].promise;
-      } catch {
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      if (sig.cancelled) break;
-      // eslint-disable-next-line no-await-in-loop
-      await spellStage(sid, ids[i], text);
-    }
-    refreshActive(sid);
-  })();
+  // التدقيق: لكل محاضرة لحظة انتهاء مسحها — بالتوازي، بسقف SPELL_CONCURRENCY.
+  // التوليد يبدأ وحده بعد المراجعة (أو فوراً إن أُلغيت المراجعة).
+  const limit = makeLimiter(SPELL_CONCURRENCY);
+  Promise.allSettled(
+    ids.map((lid, i) =>
+      texts[i].promise.then((text) =>
+        limit(() => (sig.cancelled ? null : spellStage(sid, lid, text))),
+      ),
+    ),
+  ).then(() => refreshActive(sid));
 };
 
 /** يوقف ما لم يبدأ ويُنهي الجاري عند أول فرصة. ما حُفظ يبقى. */
