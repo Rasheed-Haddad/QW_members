@@ -53,11 +53,19 @@ const Sidebar = () => {
       {/* Sidebar */}
       <aside
         dir="rtl"
-        className={`fixed top-0 right-0 h-full bg-brand text-white transition-all duration-200 z-10 ${
-          sidebarOpen ? "w-44 sm:w-48 md:w-52" : "w-0 md:w-12 hidden md:block"
+        className={`fixed top-0 right-0 h-full flex flex-col overflow-hidden bg-brand text-white transition-all duration-200 z-10 ${
+          sidebarOpen ? "w-44 sm:w-48 md:w-52" : "w-0 md:w-12 hidden md:flex"
         }`}
       >
-        <nav className="mt-4 sm:mt-6">
+        {/* القائمة تتمرّر داخل الشريط: التبويبات كثرت، والشريط ثابتٌ بارتفاع
+            الشاشة، فكانت الأخيرة تختفي تحت حافّتها بلا وسيلة للوصول إليها */}
+        <nav
+          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pt-4 sm:pt-6 pb-6"
+          style={{
+            scrollbarWidth: "thin",
+            scrollbarColor: "rgba(255,255,255,0.35) transparent",
+          }}
+        >
           <ul className="space-y-1.5 sm:space-y-2 pl-1.5 sm:pl-2">
             {menuItems.map((item) => {
               const isActive =

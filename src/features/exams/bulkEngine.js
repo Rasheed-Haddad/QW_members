@@ -377,12 +377,16 @@ const runChain = async (sid, lid, text, only = null) => {
   const on = (k) => job.steps[k] && (!only || only.includes(k));
   const cost = costOf(sid, lid);
   const base = {
-    model: run.cfg.model,
-    effort: run.cfg.effort,
     lecture_name: job.name,
     subject_name: run.subjectName,
     cost,
   };
+  // لكلٍّ من الملخص والأسئلة نموذجه وجهده: الملخص يحتاج فهماً أعمق، والأسئلة
+  // قد تكفيها درجةٌ أخفّ. model/effort القديمان احتياطٌ لتشغيلٍ بدأ قبل الفصل.
+  const claudeOf = (k) => ({
+    model: run.cfg[`${k}Model`] || run.cfg.model,
+    effort: run.cfg[`${k}Effort`] || run.cfg.effort,
+  });
   const opts = { signal: run.signal, onStatus: (note) => patchJob(sid, lid, { note }) };
 
   const gemini = (async () => {
@@ -415,7 +419,11 @@ const runChain = async (sid, lid, text, only = null) => {
     let summaryOk = true;
     if (on("summary")) {
       summaryOk = await runStep(sid, lid, "summary", async () => {
-        const r = await generateSummary(run.cfg.mode, { ...base, curriculum: text }, opts);
+        const r = await generateSummary(
+          run.cfg.mode,
+          { ...base, ...claudeOf("summary"), curriculum: text },
+          opts,
+        );
         res.sections = r.sections;
         await saveLecture(sid, lid, { summary: { sections: r.sections } });
       });
@@ -435,7 +443,7 @@ const runChain = async (sid, lid, text, only = null) => {
         if (!sections.length) throw new Error("لا ملخص للمحاضرة تُبنى عليه الأسئلة — فعّل الملخص");
         const r = await generateMcq(
           run.cfg.mode,
-          { ...base, summary: sections, number_of_questions: job.mcqCount },
+          { ...base, ...claudeOf("mcq"), summary: sections, number_of_questions: job.mcqCount },
           opts,
         );
         const qs = parsePastedQuestions(r.text).slice(0, Number(job.mcqCount) || 40);
@@ -469,7 +477,8 @@ const refreshActive = (sid) =>
 /**
  * jobs: [{ lecture_id, name, file?, steps:{ocr,spell,summary,mcq,flash,written},
  *          flashFocus, flashCount, writtenFocus, writtenCount, mcqCount }]
- * cfg: { model, effort, mode } لـClaude · { spellModel, genModel } لـGemini
+ * cfg: { summaryModel, summaryEffort, mcqModel, mcqEffort, mode } لـClaude ·
+ *      { spellModel, genModel } لـGemini · reviewSpell
  */
 export const startBulk = ({ subjectId: sid, subjectName, jobs, cfg, apiKey }) => {
   const run = {

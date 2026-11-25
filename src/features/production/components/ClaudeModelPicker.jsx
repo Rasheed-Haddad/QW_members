@@ -40,20 +40,24 @@ export const claudeDisabledReason = (status) =>
         : "";
 
 const PREFS_KEY = "claude_mcq_prefs_v1";
-const loadPrefs = () => {
+const loadPrefs = (key = PREFS_KEY) => {
   try {
-    return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") || {};
+    const own = JSON.parse(localStorage.getItem(key) || "null");
+    if (own) return own;
+    // مفتاحٌ خاصّ لم يُحفظ بعد (معالجة كل المحاضرات مثلاً): يبدأ من الاختيار العام
+    return key === PREFS_KEY ? {} : JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") || {};
   } catch {
     return {};
   }
 };
 
-/** النموذج والجهد وطريقة التنفيذ (عادي/Batch) — محفوظة، وتعود للافتراضي إن لم تعد متاحة */
-export const useClaudePrefs = (status) => {
-  const [model, setModel] = useState(() => loadPrefs().model || "");
-  const [effort, setEffort] = useState(() => loadPrefs().effort || "");
+/** النموذج والجهد وطريقة التنفيذ (عادي/Batch) — محفوظة، وتعود للافتراضي إن لم تعد متاحة.
+ *  `storeKey`: لاختيارٍ مستقلّ عن العام (الملخص والأسئلة في المعالجة الجماعية). */
+export const useClaudePrefs = (status, storeKey = PREFS_KEY) => {
+  const [model, setModel] = useState(() => loadPrefs(storeKey).model || "");
+  const [effort, setEffort] = useState(() => loadPrefs(storeKey).effort || "");
   const [mode, setMode] = useState(() =>
-    MODES.some((m) => m.id === loadPrefs().mode) ? loadPrefs().mode : "regular",
+    MODES.some((m) => m.id === loadPrefs(storeKey).mode) ? loadPrefs(storeKey).mode : "regular",
   );
 
   useEffect(() => {
@@ -66,13 +70,22 @@ export const useClaudePrefs = (status) => {
   useEffect(() => {
     if (!model || !effort) return;
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ model, effort, mode }));
+      localStorage.setItem(storeKey, JSON.stringify({ model, effort, mode }));
     } catch {
       /* التخزين غير متاح — يبقى الاختيار لهذه الجلسة */
     }
-  }, [model, effort, mode]);
+  }, [model, effort, mode, storeKey]);
 
   return { model, setModel, effort, setEffort, mode, setMode };
+};
+
+/** أسماء قصيرة للجهد — حيث المساحة ضيّقة (بطاقات المعالجة الجماعية) */
+export const EFFORT_SHORT = {
+  low: "منخفض",
+  medium: "متوسط",
+  high: "عالٍ",
+  xhigh: "عالٍ جداً",
+  max: "أقصى",
 };
 
 const EFFORT_LABELS = {

@@ -17,11 +17,14 @@ import {
   KeyRound,
   SpellCheck2,
   Trash2,
+  ScanText,
+  Layers,
+  Sparkles,
 } from "lucide-react";
 import { completedCount } from "./v2api";
 import { DEFAULT_GEMINI_MODEL } from "../production/components/AiActions";
 import {
-  ClaudeModelPicker,
+  EFFORT_SHORT,
   claudeDisabledReason,
   useClaudePrefs,
   useClaudeStatus,
@@ -99,6 +102,85 @@ const rowProblem = (r) => {
   return null;
 };
 
+// ─── بطاقات الإعداد ──────────────────────────────────────────────────────────
+// بأسلوب شريط «نص المقرر»: إطارٌ أبيض، واللون في الأيقونة وحدها، والاختيار
+// الثنائي مقطعٌ منزلق. كانت الإعدادات صفّاً واحداً من الحقول المتلاصقة (مفتاح،
+// ثلاثة نماذج، زرّ مراجعة، ملفات) يصعب أن تعرف أيّها لأيّ مرحلة؛ الآن لكل
+// مرحلةٍ بطاقتها بترتيب سير العمل: مسح ← تدقيق ← توليد Gemini ← Claude.
+
+const FIELD =
+  "w-full min-w-0 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-800 bg-white outline-none focus:border-brand disabled:opacity-40";
+
+const SetCard = ({ icon: Icon, color, title, sub, dim, children }) => (
+  <div
+    className={`rounded-xl border border-gray-200 bg-white p-3 flex flex-col gap-2 transition-opacity ${
+      dim ? "opacity-50" : ""
+    }`}
+  >
+    <div className="flex items-center gap-1.5">
+      <Icon size={15} style={{ color }} className="shrink-0" />
+      <span className="text-sm font-bold text-gray-800">{title}</span>
+      {sub && (
+        <span className="mr-auto text-[11px] text-gray-400" dir="ltr">
+          {sub}
+        </span>
+      )}
+    </div>
+    {children}
+  </div>
+);
+
+/** اختيارٌ من اثنين أو ثلاثة — كأزرار وضع العرض في «نص المقرر» */
+const Segmented = ({ value, onChange, options }) => (
+  <div className="flex items-center bg-gray-200/70 rounded-lg p-0.5 gap-0.5">
+    {options.map(([k, label]) => (
+      <button
+        key={k}
+        type="button"
+        onClick={() => onChange(k)}
+        className={`flex-1 whitespace-nowrap px-2.5 py-1 rounded-md text-xs font-semibold ${
+          value === k ? "bg-white text-brand shadow-sm" : "text-gray-500 hover:text-gray-700"
+        }`}
+      >
+        {label}
+      </button>
+    ))}
+  </div>
+);
+
+const Hint = ({ children }) => <p className="text-[11px] text-gray-400 leading-relaxed m-0">{children}</p>;
+
+/** سطرٌ لكل مهمة Claude: نموذجها وجهدها */
+const ClaudeRow = ({ label, prefs, status, off }) => (
+  <div className={`flex items-center gap-2 ${off ? "opacity-40" : ""}`}>
+    <span className="text-[11px] font-semibold text-gray-600 w-[4.5rem] shrink-0">{label}</span>
+    <select
+      value={prefs.model}
+      onChange={(e) => prefs.setModel(e.target.value)}
+      className={`${FIELD} flex-1`}
+      title="النموذج"
+    >
+      {(status?.models || []).map((m) => (
+        <option key={m.id} value={m.id}>
+          {m.label}
+        </option>
+      ))}
+    </select>
+    <select
+      value={prefs.effort}
+      onChange={(e) => prefs.setEffort(e.target.value)}
+      className={`${FIELD} !w-[5.5rem] shrink-0`}
+      title="الجهد — الأعلى أدقّ وأغلى"
+    >
+      {(status?.efforts || []).map((x) => (
+        <option key={x} value={x}>
+          {EFFORT_SHORT[x] || x}
+        </option>
+      ))}
+    </select>
+  </div>
+);
+
 export default function BulkProcessor({ subjectId, subjectName, lectures }) {
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState("setup"); // setup | run
@@ -124,7 +206,9 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
   }, [reviewSpell]);
 
   const status = useClaudeStatus();
-  const prefs = useClaudePrefs(status);
+  // نموذجٌ وجهدٌ لكلٍّ من الملخص والأسئلة، يُتذكَّران مستقلّين في هذا الجهاز
+  const sumPrefs = useClaudePrefs(status, "bulk_claude_summary_v1");
+  const mcqPrefs = useClaudePrefs(status, "bulk_claude_mcq_v1");
   const view = useBulkView(subjectId);
   const pending = usePendingReviews(subjectId);
 
@@ -237,20 +321,36 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
   const excludedCount = rows.length - included.length;
   const allIncluded = rows.length > 0 && excludedCount === 0;
   const needOcr = jobs.some((j) => j.steps.ocr);
-  const needClaude = jobs.some((j) => j.steps.summary || j.steps.mcq);
+  const needSummary = jobs.some((j) => j.steps.summary);
+  const needMcq = jobs.some((j) => j.steps.mcq);
+  const needSpell = jobs.some((j) => j.steps.spell);
+  const needGen = jobs.some((j) => j.steps.flash || j.steps.written);
+  const needClaude = needSummary || needMcq;
   const claudeReason = needClaude ? claudeDisabledReason(status) : null;
   const canStart =
     jobs.length > 0 &&
     !busy &&
     (!needOcr || apiKey.trim()) &&
-    (!needClaude || (!claudeReason && prefs.model && prefs.effort));
+    (!needClaude || !claudeReason) &&
+    (!needSummary || (sumPrefs.model && sumPrefs.effort)) &&
+    (!needMcq || (mcqPrefs.model && mcqPrefs.effort));
 
   const start = () => {
     startBulk({
       subjectId,
       subjectName,
       apiKey: apiKey.trim(),
-      cfg: { model: prefs.model, effort: prefs.effort, mode: prefs.mode, spellModel, genModel, reviewSpell },
+      cfg: {
+        summaryModel: sumPrefs.model,
+        summaryEffort: sumPrefs.effort,
+        mcqModel: mcqPrefs.model,
+        mcqEffort: mcqPrefs.effort,
+        // طريقة التنفيذ واحدة لطلبات Claude كلها في الدفعة
+        mode: sumPrefs.mode,
+        spellModel,
+        genModel,
+        reviewSpell,
+      },
       jobs: jobs.map((j) => ({
         lecture_id: j.lecture_id,
         name: j.name,
@@ -338,32 +438,47 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
 
           {phase === "setup" ? (
             <>
-              {/* الإعدادات العامة */}
-              <div className="px-4 py-3 border-b border-gray-100 flex items-end gap-3 flex-wrap bg-gray-50">
-                <label className="flex flex-col gap-1 text-xs text-gray-500">
-                  <span className="flex items-center gap-1">
-                    <KeyRound size={12} /> مفتاح Mistral (للمسح)
-                  </span>
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    dir="ltr"
-                    className="w-56 border border-gray-300 rounded-lg p-2 text-sm"
-                  />
-                </label>
-                <ClaudeModelPicker status={status} prefs={prefs} />
-                {[
-                  ["Gemini — التدقيق", spellModel, setSpellModel],
-                  ["Gemini — البطاقات والتحريري", genModel, setGenModel],
-                ].map(([label, value, set]) => (
-                  <label key={label} className="flex flex-col gap-1 text-xs text-gray-500">
-                    {label}
+              {/* الإعدادات العامة — بطاقةٌ لكل مرحلة بترتيب سير العمل */}
+              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+                <div className="grid gap-2.5 grid-cols-1 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1.55fr]">
+                  <SetCard icon={ScanText} color="#0ea5e9" title="المسح" sub="Mistral OCR" dim={!needOcr}>
+                    <div className="relative">
+                      <KeyRound
+                        size={13}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"
+                      />
+                      <input
+                        type="password"
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        placeholder="مفتاح Mistral"
+                        dir="ltr"
+                        className={`${FIELD} pr-8 ${needOcr && !apiKey.trim() ? "!border-red-300" : ""}`}
+                      />
+                    </div>
+                    <label className="cursor-pointer whitespace-nowrap text-xs font-semibold rounded-lg px-2.5 py-1.5 flex items-center justify-center gap-1.5 border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300">
+                      <Files size={14} style={{ color: "#0ea5e9" }} /> اختيار ملفات متعددة…
+                      <input
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        multiple
+                        className="hidden"
+                        onChange={async (e) => {
+                          const fs = [...(e.target.files || [])];
+                          e.target.value = "";
+                          if (fs.length) await pickMany(fs);
+                        }}
+                      />
+                    </label>
+                    <Hint>تُطابَق بأسماء المحاضرات تلقائياً. أطفئ «مسح» لمحاضرةٍ ليُستعمل نصّها المحفوظ.</Hint>
+                  </SetCard>
+
+                  <SetCard icon={SpellCheck2} color="#f59e0b" title="التدقيق" sub="Gemini" dim={!needSpell}>
                     <select
-                      value={value}
-                      onChange={(e) => set(e.target.value)}
+                      value={spellModel}
+                      onChange={(e) => setSpellModel(e.target.value)}
                       dir="ltr"
-                      className="border border-gray-300 rounded-lg p-2 text-sm bg-white min-w-[12rem]"
+                      className={FIELD}
                     >
                       {modelOptions.map((m) => (
                         <option key={m} value={m}>
@@ -371,41 +486,55 @@ export default function BulkProcessor({ subjectId, subjectName, lectures }) {
                         </option>
                       ))}
                     </select>
-                  </label>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setReviewSpell((v) => !v)}
-                  title={
-                    reviewSpell
-                      ? "التصحيحات تنتظر مراجعتك قبل التوليد"
-                      : "التصحيحات المقبولة تُطبَّق فور انتهاء التدقيق، والتوليد يبدأ مباشرةً"
-                  }
-                  className={`text-sm font-semibold rounded-lg px-3 py-2 flex items-center gap-1.5 border ${
-                    reviewSpell ? "border-amber-300 bg-amber-50 text-amber-800" : "border-green-300 bg-green-50 text-green-800"
-                  }`}
-                >
-                  {reviewSpell ? <CheckSquare size={15} /> : <Square size={15} />}
-                  {reviewSpell ? "مراجعة التدقيق قبل التوليد" : "تطبيق التدقيق آلياً بلا مراجعة"}
-                </button>
-                <label className="cursor-pointer text-sm font-semibold text-brand border border-brand/30 bg-white rounded-lg px-3 py-2 flex items-center gap-1.5">
-                  <Files size={15} /> اختيار ملفات متعددة
-                  <input
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    multiple
-                    className="hidden"
-                    onChange={async (e) => {
-                      const fs = [...(e.target.files || [])];
-                      e.target.value = "";
-                      if (fs.length) await pickMany(fs);
-                    }}
-                  />
-                </label>
-                <p className="text-[11px] text-gray-400 max-w-xs">
-                  الملفات المتعددة تُطابَق بأسماء المحاضرات تلقائياً. أطفئ «مسح» لمحاضرةٍ ليُستعمل
-                  نصّها المحفوظ.
-                </p>
+                    <Segmented
+                      value={reviewSpell ? "review" : "auto"}
+                      onChange={(v) => setReviewSpell(v === "review")}
+                      options={[
+                        ["review", "أراجعه أنا"],
+                        ["auto", "يُطبَّق آلياً"],
+                      ]}
+                    />
+                    <Hint>
+                      {reviewSpell
+                        ? "التصحيحات تنتظر مراجعتك، وبعد «طبّق» يبدأ التوليد."
+                        : "المقبول يُطبَّق فور انتهاء التدقيق، ويبدأ التوليد مباشرةً."}
+                    </Hint>
+                  </SetCard>
+
+                  <SetCard icon={Layers} color="#10b981" title="البطاقات والتحريري" sub="Gemini" dim={!needGen}>
+                    <select
+                      value={genModel}
+                      onChange={(e) => setGenModel(e.target.value)}
+                      dir="ltr"
+                      className={FIELD}
+                    >
+                      {modelOptions.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                    <Hint>العدد وموضوع التركيز لكل محاضرة من الجدول أدناه.</Hint>
+                  </SetCard>
+
+                  <SetCard icon={Sparkles} color="#8C52FF" title="الملخص والأسئلة" sub="Claude" dim={!needClaude}>
+                    <ClaudeRow label="الملخص" prefs={sumPrefs} status={status} off={!needSummary} />
+                    <ClaudeRow label="أسئلة MCQ" prefs={mcqPrefs} status={status} off={!needMcq} />
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-semibold text-gray-600 w-[4.5rem] shrink-0">التنفيذ</span>
+                      <div className="flex-1">
+                        <Segmented
+                          value={sumPrefs.mode}
+                          onChange={sumPrefs.setMode}
+                          options={[
+                            ["regular", "عادي — فوري"],
+                            ["batch", "Batch — نصف السعر"],
+                          ]}
+                        />
+                      </div>
+                    </div>
+                  </SetCard>
+                </div>
               </div>
               {claudeReason && (
                 <p className="mx-4 mt-2 text-xs text-red-600">{claudeReason}</p>
