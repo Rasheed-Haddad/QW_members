@@ -31,6 +31,14 @@ const safeFileName = (s) =>
     .trim()
     .slice(0, 120);
 
+// رسائلنا العربية تُعرض كما هي؛ والتقنية الإنجليزية (من داخل المكتبة) تُلحق
+// بجملةٍ مفهومة بدل أن تُعرض وحدها كما حدث مع «Expected instance of t»
+const arabicOr = (e, fallback) => {
+  const m = e?.message || "";
+  if (/[\u0600-\u06FF]/.test(m)) return m;
+  return m ? `${fallback} (${m})` : fallback;
+};
+
 const newRow = (from = "", to = "") => ({
   key: Math.random().toString(36).slice(2),
   name: "",
@@ -63,10 +71,10 @@ export default function SplitPdfAction({ pdfBytes, onPdfBytes }) {
           rs.length === 1 && !rs[0].to ? [{ ...rs[0], to: n }] : rs,
         );
       })
-      .catch(() =>
+      .catch((e) =>
         setResult({
           ok: false,
-          message: "تعذّر قراءة الملف — هل هو PDF سليم؟",
+          message: arabicOr(e, "تعذّر قراءة الملف — جرّب نسخة أخرى منه"),
         }),
       );
   }, [bytes]);
@@ -168,7 +176,10 @@ export default function SplitPdfAction({ pdfBytes, onPdfBytes }) {
         setResult({ ok: true, message: `نُزّل ${files.length} ملفاً` });
       }
     } catch (e) {
-      setResult({ ok: false, message: e?.message || "تعذّر التقسيم أو الحفظ" });
+      setResult({
+        ok: false,
+        message: arabicOr(e, "تعذّر التقسيم أو الحفظ — لم يُحفظ أي ملف، والأصل كما هو"),
+      });
     } finally {
       setBusy("");
     }

@@ -1,9 +1,10 @@
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.js?url";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument } from "@cantoo/pdf-lib";
 
 // ─── محرّك PDF ────────────────────────────────────────────────────────────────
-// pdf.js للعرض (رسم الصفحات واستخراج النص)، وpdf-lib للقصّ والدمج.
+// pdf.js للعرض (رسم الصفحات واستخراج النص)، و@cantoo/pdf-lib للقصّ والدمج
+// (فرعٌ من pdf-lib يفكّ تشفير المقررات المحمية — انظر loadPdfForEdit).
 //
 // العامل (worker) يُستورد بـ?url لا برابط CDN: اللوحة تعمل داخل Electron من
 // بروتوكول file:// وبلا إنترنت أحياناً، والأداة المرجعية كانت تموت صامتةً
@@ -154,6 +155,29 @@ export const firstMeaningfulLine = async (pdf, pageNum) => {
   }
 };
 
+// ─── فتح مستندٍ للقصّ والدمج ──────────────────────────────────────────────────
+// مقررات كثيرة «محمية»: مشفّرة بلا كلمة مرور للفتح، والقيد على النسخ
+// والتعديل فقط. pdf.js يعرضها عادياً فلا يبدو فيها شيء، لكن pdf-lib الأصلية
+// لا تفكّ التشفير، و ignoreEncryption كان يجعلها تقرأ الكائنات المشفّرة
+// كأنها سليمة: تضيع شجرة الصفحات، وينهار القصّ برسالة
+// «Expected instance of PDFDict, but got instance of undefined».
+// الفرع @cantoo/pdf-lib (بديلٌ مباشر) يفكّها بكلمة مرور فارغة، والناتج غير
+// مشفّر. والملف غير المشفّر يُفتح بالخيار نفسه كما هو.
+export const loadPdfForEdit = async (bytes) => {
+  try {
+    // نسخة مستقلة: pdf.js قد يكون استولى على المخزن الأصلي
+    return await PDFDocument.load(new Uint8Array(bytes).slice(0), { password: "" });
+  } catch (e) {
+    if (/NEEDS PASSWORD|password/i.test(e?.message || ""))
+      throw new Error(
+        "الملف مقفل بكلمة مرور للفتح — افتحه بكلمته واحفظ منه نسخة غير محمية، ثم اختر النسخة هنا",
+      );
+    if (/PDF header|Failed to parse/i.test(e?.message || ""))
+      throw new Error("لم أتمكّن من قراءة هذا الملف كـ PDF — جرّب نسخة أخرى منه");
+    throw e;
+  }
+};
+
 /** يدمج ملفات في مستند واحد، ويعيد معه حدود كل ملف أصلي.
  *  الحدود تُعرض على الشبكة: المستخدم يحتاج أن يرى أين كان الملف ينتهي
  *  حتى بعد الدمج — تلك معلومة يملكها هو ولا نملكها نحن. */
@@ -163,7 +187,7 @@ export const mergeFiles = async (files) => {
   let cursor = 1;
   for (const f of files) {
     const bytes = await f.arrayBuffer();
-    const src = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    const src = await loadPdfForEdit(bytes);
     const idx = src.getPageIndices();
     const pages = await out.copyPages(src, idx);
     pages.forEach((p) => out.addPage(p));
@@ -188,8 +212,7 @@ export const cutRange = async (srcDoc, start, end) => {
   return doc.save();
 };
 
-export const loadForCutting = (bytes) =>
-  PDFDocument.load(bytes, { ignoreEncryption: true });
+export const loadForCutting = (bytes) => loadPdfForEdit(bytes);
 
 /** يقصّ كل النطاقات. onProgress(done, total, name) لأن قصّ 40 محاضرة
  *  يستغرق ثوانيَ، والصمت فيها يبدو تعليقاً. */
@@ -233,9 +256,7 @@ export const formatSize = (n) => {
  * `onEach(i)` يُستدعى بعد كل ملف — للتقدّم.
  */
 export const splitPdf = async (bytes, ranges, onEach) => {
-  const { PDFDocument } = await import("pdf-lib");
-  // نسخة مستقلة: pdf.js قد يكون استولى على المخزن الأصلي
-  const src = await PDFDocument.load(bytes.slice(0), { ignoreEncryption: true });
+  const src = await loadPdfForEdit(bytes);
   const outs = [];
   for (let i = 0; i < ranges.length; i++) {
     const { from, to } = ranges[i];
@@ -251,8 +272,4 @@ export const splitPdf = async (bytes, ranges, onEach) => {
 };
 
 /** عدد صفحات مستند — للتحقّق من حدود التقسيم */
-export const pageCount = async (bytes) => {
-  const { PDFDocument } = await import("pdf-lib");
-  const src = await PDFDocument.load(bytes.slice(0), { ignoreEncryption: true });
-  return src.getPageCount();
-};
+export const pageCount = async (bytes) => (await loadPdfForEdit(bytes)).getPageCount();
